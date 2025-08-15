@@ -22,13 +22,6 @@ import (
 //
 // This creates virtual loopback sound cards that allow testing playback and capture.
 
-const (
-	// kLoopbackPlaybackDevice is the playback device on the loopback card.
-	kLoopbackPlaybackDevice = 0
-	// kLoopbackCaptureDevice is the capture device on the loopback card.
-	kLoopbackCaptureDevice = 1
-)
-
 var (
 	// kDefaultConfig mirrors the configuration used in the C++ tests.
 	kDefaultConfig = alsa.Config{
@@ -122,7 +115,7 @@ func testPcmOpenAndClose(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, tc.flags, &kDefaultConfig)
+			pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), tc.flags, &kDefaultConfig)
 			if err != nil {
 				// The TTSTAMP ioctl for PCM_MONOTONIC is not supported by all kernels/devices.
 				// If it fails with ENOTTY or EINVAL, skip the test gracefully.
@@ -149,7 +142,7 @@ func testPcmOpenAndClose(t *testing.T) {
 
 	// Test open by name
 	t.Run("OpenByName", func(t *testing.T) {
-		name := fmt.Sprintf("hw:%d,%d", loopbackCard, kLoopbackPlaybackDevice)
+		name := fmt.Sprintf("hw:%d,%d", loopbackCard, loopbackPlaybackDevice)
 		pcm, err := alsa.PcmOpenByName(name, alsa.PCM_OUT, &kDefaultConfig)
 		if err != nil {
 			t.Fatalf("PcmOpenByName failed: %v", err)
@@ -170,13 +163,13 @@ func testPcmPlaybackStartup(t *testing.T) {
 	// It ensures a playback-only stream can be started correctly by the first write,
 	// without an explicit Start() call which would cause an immediate XRUN.
 	config := kDefaultConfig
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &config)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
 	require.NoError(t, err, "Failed to open PCM for playback")
 	defer pcm.Close()
 
 	// To prevent the write from blocking indefinitely on the loopback device,
 	// we must consume the data on the other end.
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &config)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &config)
 	require.NoError(t, err, "Could not open capture side of loopback")
 	defer capturePcm.Close()
 
@@ -235,7 +228,7 @@ func testPcmPlaybackStartup(t *testing.T) {
 }
 
 func testPcmGetters(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -251,7 +244,7 @@ func testPcmGetters(t *testing.T) {
 }
 
 func testPcmFramesBytesConvert(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -261,7 +254,7 @@ func testPcmFramesBytesConvert(t *testing.T) {
 }
 
 func testPcmTimestampBeforeStart(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -272,7 +265,7 @@ func testPcmTimestampBeforeStart(t *testing.T) {
 }
 
 func testPcmWriteiFailsOnCapture(t *testing.T) {
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
 	require.NoError(t, err)
 	defer capturePcm.Close()
 
@@ -282,7 +275,7 @@ func testPcmWriteiFailsOnCapture(t *testing.T) {
 }
 
 func testPcmReadiFailsOnPlayback(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -294,11 +287,11 @@ func testPcmReadiFailsOnPlayback(t *testing.T) {
 
 func testPcmWriteiTiming(t *testing.T) {
 	config := kDefaultConfig
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &config)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &config)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &config)
 	require.NoError(t, err, "Could not open capture side of device")
 	defer capturePcm.Close()
 
@@ -380,7 +373,7 @@ func testPcmWriteiTiming(t *testing.T) {
 }
 
 func testPcmGetDelay(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -396,11 +389,11 @@ func testPcmGetDelay(t *testing.T) {
 }
 
 func testPcmReadiTiming(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	playbackPcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	playbackPcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err)
 	defer playbackPcm.Close()
 
@@ -477,11 +470,11 @@ func testPcmReadiTiming(t *testing.T) {
 }
 
 func testPcmMmapWrite(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT|alsa.PCM_MMAP, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_MMAP, &kDefaultConfig)
 	require.NoError(t, err, "PcmOpen with MMAP failed")
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN|alsa.PCM_MMAP, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_MMAP, &kDefaultConfig)
 	require.NoError(t, err, "PcmOpen capture (MMAP) failed")
 	defer capturePcm.Close()
 
@@ -574,13 +567,13 @@ func testPcmParams(t *testing.T) {
 		require.Error(t, err, "expected error when getting params for non-existent device")
 
 		// Test valid device
-		params, err = alsa.PcmParamsGet(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT)
+		params, err = alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 		require.NoError(t, err, "PcmParamsGet failed for valid device")
 		require.NotNil(t, params, "PcmParamsGet returned nil params for valid device")
 		params.Free() // Freeing should not panic
 	})
 
-	params, err := alsa.PcmParamsGet(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT)
+	params, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 	require.NoError(t, err)
 	defer params.Free()
 
@@ -631,7 +624,7 @@ func testPcmParams(t *testing.T) {
 }
 
 func testSetConfig(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, nil)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, nil)
 	require.NoError(t, err, "PcmOpen with nil config failed")
 	defer pcm.Close()
 
@@ -663,11 +656,11 @@ func testSetConfig(t *testing.T) {
 func testPcmLink(t *testing.T) {
 	// Open two streams on the same subdevice of the loopback card.
 	// This requires a card that supports multiple streams on one device, which snd-aloop does.
-	pcm1, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm1, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err, "Failed to open pcm1")
 	defer pcm1.Close()
 
-	pcm2, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm2, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err, "Failed to open pcm2")
 	defer pcm2.Close()
 
@@ -683,11 +676,11 @@ func testPcmLink(t *testing.T) {
 }
 
 func testPcmDrain(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
 	require.NoError(t, err, "Could not open capture side of device")
 	defer capturePcm.Close()
 
@@ -758,11 +751,11 @@ func testPcmPause(t *testing.T) {
 	flags := alsa.PCM_OUT
 	captureFlags := alsa.PCM_IN
 
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, flags, &config)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), flags, &config)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, captureFlags, &config)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), captureFlags, &config)
 	require.NoError(t, err, "PcmOpen capture failed")
 	defer capturePcm.Close()
 
@@ -840,11 +833,11 @@ func testPcmLoopback(t *testing.T) {
 	}
 
 	// First, check if the loopback device supports the formats we want to test.
-	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT)
+	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 	require.NoError(t, err, "Failed to get params for loopback playback device")
 	defer playbackParams.Free()
 
-	captureParams, err := alsa.PcmParamsGet(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN)
+	captureParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN)
 	require.NoError(t, err, "Failed to get params for loopback capture device")
 	defer captureParams.Free()
 
@@ -862,12 +855,12 @@ func testPcmLoopback(t *testing.T) {
 			config.Format = tf.format
 
 			// Open playback stream
-			pcmOut, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT, &config)
+			pcmOut, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
 			require.NoError(t, err, "PcmOpen(playback) failed")
 			defer pcmOut.Close()
 
 			// Open capture stream
-			pcmIn, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN, &config)
+			pcmIn, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &config)
 			require.NoError(t, err, "PcmOpen(capture) failed")
 			defer pcmIn.Close()
 
@@ -1004,7 +997,7 @@ func testPcmMmapLoopback(t *testing.T) {
 	config.Format = alsa.PCM_FORMAT_S16_LE
 
 	// Ensure the loopback device supports the required format and MMAP access.
-	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT)
+	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 	require.NoError(t, err)
 	defer playbackParams.Free()
 	if !playbackParams.FormatIsSupported(config.Format) {
@@ -1018,12 +1011,12 @@ func testPcmMmapLoopback(t *testing.T) {
 	}
 
 	// Open playback stream with MMAP
-	pcmOut, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackPlaybackDevice, alsa.PCM_OUT|alsa.PCM_MMAP, &config)
+	pcmOut, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_MMAP, &config)
 	require.NoError(t, err, "PcmOpen(playback, mmap) failed")
 	defer pcmOut.Close()
 
 	// Open capture stream with MMAP
-	pcmIn, err := alsa.PcmOpen(uint(loopbackCard), kLoopbackCaptureDevice, alsa.PCM_IN|alsa.PCM_MMAP, &config)
+	pcmIn, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_MMAP, &config)
 	require.NoError(t, err, "PcmOpen(capture, mmap) failed")
 	defer pcmIn.Close()
 
