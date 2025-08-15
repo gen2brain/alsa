@@ -131,16 +131,16 @@ func init() {
 	SNDRV_PCM_IOCTL_DROP = io('A', 0x43)
 	SNDRV_PCM_IOCTL_DRAIN = io('A', 0x44)
 	SNDRV_PCM_IOCTL_PAUSE = iow('A', 0x45, unsafe.Sizeof(int32(0)))
-	SNDRV_PCM_IOCTL_RESUME = io('A', 0x46)
+	SNDRV_PCM_IOCTL_RESUME = io('A', 0x47)
 
 	// Synchronization IOCTLs
-	SNDRV_PCM_IOCTL_HWSYNC = io('A', 0x30)
-	SNDRV_PCM_IOCTL_DELAY = ior('A', 0x31, unsafe.Sizeof(int(0))) // ssize_t is same size as int
-	SNDRV_PCM_IOCTL_TTSTAMP = iow('A', 0x32, unsafe.Sizeof(int32(0)))
-	SNDRV_PCM_IOCTL_SYNC_PTR = iowr('A', 0x33, unsafe.Sizeof(sndPcmSyncPtr{}))
+	SNDRV_PCM_IOCTL_HWSYNC = io('A', 0x22)
+	SNDRV_PCM_IOCTL_DELAY = ior('A', 0x21, unsafe.Sizeof(sndPcmSframesT(0)))
+	SNDRV_PCM_IOCTL_TTSTAMP = iow('A', 0x03, unsafe.Sizeof(int32(0)))
+	SNDRV_PCM_IOCTL_SYNC_PTR = iowr('A', 0x23, unsafe.Sizeof(sndPcmSyncPtr{}))
 
 	// Linking IOCTLs
-	SNDRV_PCM_IOCTL_LINK = io('A', 0x60)
+	SNDRV_PCM_IOCTL_LINK = iow('A', 0x60, unsafe.Sizeof(int32(0)))
 	SNDRV_PCM_IOCTL_UNLINK = io('A', 0x61)
 
 	// Frame transfer IOCTLs. These numbers are correct for modern kernels.
@@ -156,7 +156,7 @@ func init() {
 	SNDRV_CTL_IOCTL_ELEM_INFO = iowr('U', 0x11, unsafe.Sizeof(sndCtlElemInfo{}))
 	SNDRV_CTL_IOCTL_ELEM_READ = iowr('U', 0x12, unsafe.Sizeof(sndCtlElemValue{}))
 	SNDRV_CTL_IOCTL_ELEM_WRITE = iowr('U', 0x13, unsafe.Sizeof(sndCtlElemValue{}))
-	SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS = iowr('U', 0x14, unsafe.Sizeof(int32(0)))
-	SNDRV_CTL_IOCTL_TLV_READ = iowr('U', 0x17, unsafe.Sizeof(sndCtlTlv{}))
-	SNDRV_CTL_IOCTL_TLV_WRITE = iowr('U', 0x16, unsafe.Sizeof(sndCtlTlv{}))
+	SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS = iowr('U', 0x16, unsafe.Sizeof(int32(0)))
+	SNDRV_CTL_IOCTL_TLV_READ = iowr('U', 0x1a, unsafe.Sizeof(sndCtlTlv{}))
+	SNDRV_CTL_IOCTL_TLV_WRITE = iowr('U', 0x1b, unsafe.Sizeof(sndCtlTlv{}))
 }

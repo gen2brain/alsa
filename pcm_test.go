@@ -657,17 +657,18 @@ func testPcmLink(t *testing.T) {
 	// Open two streams on the same subdevice of the loopback card.
 	// This requires a card that supports multiple streams on one device, which snd-aloop does.
 	pcm1, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
-	require.NoError(t, err, "Failed to open pcm1")
+	require.NoError(t, err, "Failed to open playback stream")
 	defer pcm1.Close()
 
-	pcm2, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
-	require.NoError(t, err, "Failed to open pcm2")
+	pcm2, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	require.NoError(t, err, "Failed to open capture stream")
 	defer pcm2.Close()
 
 	if err := pcm1.Link(pcm2); err != nil {
 		// Some kernels/ALSA versions might not support linking on all devices.
 		// We log instead of failing hard.
 		t.Logf("pcm1.Link(pcm2) failed: %v. This may not be supported on this system.", err)
+
 		return
 	}
 

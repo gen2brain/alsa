@@ -6,6 +6,10 @@ package alsa
 // On 32-bit architectures, this is a 32-bit unsigned integer.
 type SndPcmUframesT = uint32
 
+// sndPcmSframesT is a signed long in the ALSA headers.
+// On 32-bit architectures, this is a 32-bit signed integer.
+type sndPcmSframesT = int32
+
 // clong is a type alias for the C `long` type on 32-bit systems.
 type clong = int32
 
