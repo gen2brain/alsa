@@ -312,7 +312,9 @@ func (p *PCM) SetConfig(config *Config) error {
 	paramSetMask(hwParams, PCM_PARAM_SUBFORMAT, 0) // SNDRV_PCM_SUBFORMAT_STD
 	paramSetMin(hwParams, PCM_PARAM_SAMPLE_BITS, pcmFormatToRealBits(config.Format))
 	paramSetInt(hwParams, PCM_PARAM_CHANNELS, config.Channels)
-	paramSetInt(hwParams, PCM_PARAM_RATE, config.Rate)
+	// Use paramSetMin for Rate to be more flexible. This asks the driver for a rate
+	// of *at least* the requested value, allowing it to choose the nearest supported rate.
+	paramSetMin(hwParams, PCM_PARAM_RATE, config.Rate)
 	paramSetInt(hwParams, PCM_PARAM_PERIODS, config.PeriodCount)
 	paramSetMin(hwParams, PCM_PARAM_PERIOD_SIZE, config.PeriodSize)
 
@@ -333,6 +335,7 @@ func (p *PCM) SetConfig(config *Config) error {
 	}
 
 	// Update our config with the refined parameters from the driver.
+	p.config.Rate = paramGetInt(hwParams, PCM_PARAM_RATE)
 	p.config.PeriodSize = paramGetInt(hwParams, PCM_PARAM_PERIOD_SIZE)
 	p.config.PeriodCount = paramGetInt(hwParams, PCM_PARAM_PERIODS)
 	p.bufferSize = p.config.PeriodSize * p.config.PeriodCount
