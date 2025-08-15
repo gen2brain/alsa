@@ -308,7 +308,14 @@ func (m *Mixer) ReadEvent() (*MixerEvent, error) {
 	}
 
 	ev = *(*sndCtlEvent)(unsafe.Pointer(&buffer[0]))
-	event := &MixerEvent{Type: MixerEventType(ev.Typ)}
+
+	// In ALSA, the `Typ` field identifies the event category. For control element
+	// changes (the ones we care about), this type is SNDRV_CTL_EVENT_ELEM.
+	if ev.Typ != SNDRV_CTL_EVENT_ELEM {
+		return nil, fmt.Errorf("received non-element event type: %d", ev.Typ)
+	}
+
+	event := &MixerEvent{Type: MixerEventType(ev.Elem.Mask)}
 
 	// The mask indicates what kind of event it is. For VALUE, INFO, ADD, and REMOVE,
 	// the event data contains the element ID.

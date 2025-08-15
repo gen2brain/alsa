@@ -135,6 +135,8 @@ const (
 type MixerEventType uint32
 
 const (
+	SNDRV_CTL_EVENT_ELEM = 0
+
 	// Indicates that a control element's value has changed.
 	SNDRV_CTL_EVENT_MASK_VALUE MixerEventType = 1 << 0
 	// Indicates that a control element's metadata (e.g., range) has changed.
