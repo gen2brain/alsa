@@ -143,8 +143,7 @@ func init() {
 	SNDRV_PCM_IOCTL_LINK = iow('A', 0x60, unsafe.Sizeof(int32(0)))
 	SNDRV_PCM_IOCTL_UNLINK = io('A', 0x61)
 
-	// Frame transfer IOCTLs. These numbers are correct for modern kernels.
-	// The previous values (0x20, 0x21) were obsolete.
+	// Frame transfer IOCTLs
 	SNDRV_PCM_IOCTL_WRITEI_FRAMES = iow('A', 0x50, unsafe.Sizeof(sndXferi{}))
 	SNDRV_PCM_IOCTL_READI_FRAMES = ior('A', 0x51, unsafe.Sizeof(sndXferi{}))
 	SNDRV_PCM_IOCTL_WRITEN_FRAMES = iow('A', 0x52, unsafe.Sizeof(sndXfern{}))
