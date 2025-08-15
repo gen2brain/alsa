@@ -1,5 +1,26 @@
 package alsa
 
+// kernelTimespec matches the Linux kernel's struct __kernel_timespec,
+// which uses 64-bit fields for time on all architectures (since Y2038 fixes).
+type kernelTimespec struct {
+	Sec  int64
+	Nsec int64
+}
+
+// sndXferi is for interleaved read/write operations.
+type sndXferi struct {
+	Result int     // Corresponds to C ssize_t
+	Buf    uintptr // void*
+	Frames SndPcmUframesT
+}
+
+// sndXfern is for non-interleaved read/write operations.
+type sndXfern struct {
+	Result int     // Corresponds to C ssize_t
+	Bufs   uintptr // void**
+	Frames SndPcmUframesT
+}
+
 // sndMask is a bitmask for hardware parameters.
 type sndMask struct {
 	Bits [8]uint32
@@ -27,6 +48,29 @@ type sndPcmInfo struct {
 	SubdevicesAvail uint32
 	Sync            [16]byte // snd_sync_id_t
 	Reserved        [64]byte
+}
+
+// sndPcmMmapControl contains control parameters for an MMAP PCM stream.
+type sndPcmMmapControl struct {
+	ApplPtr  SndPcmUframesT
+	AvailMin SndPcmUframesT
+}
+
+// sndPcmHwParams contains hardware parameters for a PCM device.
+type sndPcmHwParams struct {
+	Flags     uint32
+	Masks     [3]sndMask
+	Mres      [5]sndMask // reserved for future use
+	Intervals [12]sndInterval
+	Ires      [9]sndInterval // reserved for future use
+	Rmask     uint32
+	Cmask     uint32
+	Info      uint32
+	Msbits    uint32
+	RateNum   uint32
+	RateDen   uint32
+	FifoSize  SndPcmUframesT
+	Reserved  [64]byte
 }
 
 // sndCtlCardInfo contains general information about a sound card.
@@ -64,6 +108,16 @@ type sndCtlElemInfo struct {
 	Value [128]byte
 	// Reserved field size to match modern kernel expectations
 	Reserved [64]byte
+}
+
+// sndCtlElemList is used to enumerate control elements.
+type sndCtlElemList struct {
+	Offset   uint32
+	Space    uint32
+	Used     uint32
+	Count    uint32
+	Pids     uintptr // *sndCtlElemId
+	Reserved [50]byte
 }
 
 // sndCtlEvent represents a notification from the control interface.
