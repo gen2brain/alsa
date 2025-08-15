@@ -439,13 +439,14 @@ func (p *PCM) xrunRecover(err error) error {
 // WriteI writes interleaved audio data to a playback PCM device using an ioctl call.
 // data must be a slice of a supported numeric type (e.g., []int16, []float32).
 // This is the idiomatic way to perform blocking I/O with ALSA.
-// It automatically prepares and starts the stream and recovers from underruns (EPIPE) by retrying once.
-// The data buffer should contain data for the number of 'frames' specified.
+// It automatically prepares and starts the stream, recovers from underruns (EPIPE),
+// and loops until all requested frames have been written or an unrecoverable error occurs.
 // Returns the number of frames actually written.
 func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) != 0 {
 		return 0, p.setError(nil, "cannot write to a capture device")
 	}
+
 	if (p.flags & PCM_MMAP) != 0 {
 		return 0, p.setError(nil, "use MmapWrite for mmap devices")
 	}
@@ -454,6 +455,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	if err != nil {
 		return 0, p.setError(err, "invalid data type for WriteI")
 	}
+
 	requiredBytes := PcmFramesToBytes(p, frames)
 	if byteLen < requiredBytes {
 		return 0, p.setError(nil, "data buffer too small: needs %d bytes, got %d", requiredBytes, byteLen)
@@ -463,37 +465,74 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		return 0, nil
 	}
 
-	xfer := sndXferi{Frames: SndPcmUframesT(frames)}
-	if reflect.ValueOf(data).Len() > 0 {
-		xfer.Buf = reflect.ValueOf(data).Index(0).Addr().Pointer()
-	}
+	// Keep the data slice alive for the duration of the system calls.
 	defer runtime.KeepAlive(data)
 
+	// Prepare stream if it's not already running or prepared.
 	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
 	}
 
-	err = ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+	dataPtr := uintptr(0)
+	if reflect.ValueOf(data).Len() > 0 {
+		dataPtr = reflect.ValueOf(data).Index(0).Addr().Pointer()
+	}
 
-	if err != nil && (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
-		if errRec := p.xrunRecover(err); errRec != nil {
-			return 0, errRec
+	framesWritten := uint32(0)
+	for framesWritten < frames {
+		remainingFrames := frames - framesWritten
+		offsetBytes := PcmFramesToBytes(p, framesWritten)
+
+		xfer := sndXferi{
+			Frames: SndPcmUframesT(remainingFrames),
+			Buf:    dataPtr + uintptr(offsetBytes),
 		}
-		err = ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+
+		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+
+		if xfer.Result > 0 {
+			framesWritten += uint32(xfer.Result)
+		}
+
+		if err != nil {
+			var errno syscall.Errno
+			if errors.As(err, &errno) {
+				// For non-blocking mode, EAGAIN means the buffer is full.
+				// Stop and return the frames written so far.
+				if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(errno, syscall.EAGAIN) {
+					break
+				}
+
+				// EINTR is a temporary interruption; just retry the operation.
+				if errors.Is(errno, syscall.EINTR) {
+					continue
+				}
+
+				// For underruns (EPIPE), try to recover if not disabled.
+				if (p.flags&PCM_NORESTART) == 0 && errors.Is(errno, syscall.EPIPE) {
+					if errRec := p.xrunRecover(err); errRec != nil {
+						// Recovery failed, return what we've written and the error.
+						return int(framesWritten), errRec
+					}
+
+					// Recovery succeeded, continue the loop to retry writing.
+					continue
+				}
+			}
+
+			// For any other error, it's unrecoverable.
+			p.state = PCM_STATE_XRUN
+			return int(framesWritten), p.setError(err, "ioctl WRITEI_FRAMES failed")
+		}
+
+		if p.state != PCM_STATE_RUNNING {
+			p.state = PCM_STATE_RUNNING
+		}
 	}
 
-	if err != nil {
-		p.state = PCM_STATE_XRUN
-		return 0, p.setError(err, "ioctl WRITEI_FRAMES failed")
-	}
-
-	if p.state != PCM_STATE_RUNNING {
-		p.state = PCM_STATE_RUNNING
-	}
-
-	return int(xfer.Result), nil
+	return int(framesWritten), nil
 }
 
 // WriteN writes non-interleaved audio data to a playback PCM device.
@@ -506,9 +545,11 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) != 0 {
 		return 0, p.setError(nil, "cannot write to a capture device")
 	}
+
 	if (p.flags & PCM_MMAP) != 0 {
 		return 0, p.setError(nil, "WriteN is not for mmap devices")
 	}
+
 	if uint32(len(data)) != p.config.Channels {
 		return 0, p.setError(nil, "incorrect number of channels in data: expected %d, got %d", p.config.Channels, len(data))
 	}
@@ -551,6 +592,7 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 
 	if err != nil {
 		p.state = PCM_STATE_XRUN
+
 		return 0, p.setError(err, "ioctl WRITEN_FRAMES failed")
 	}
 
@@ -558,19 +600,20 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 		p.state = PCM_STATE_RUNNING
 	}
 
-	return int(xfer.Result), nil
+	return xfer.Result, nil
 }
 
 // ReadI reads interleaved audio data from a capture PCM device using an ioctl call.
 // buffer must be a slice of a supported numeric type (e.g., []int16, []float32).
 // This is the idiomatic way to perform blocking I/O with ALSA.
-// It automatically starts the stream and recovers from overruns (EPIPE) by retrying once.
-// The provided buffer must be large enough to hold 'frames' of audio data.
+// It automatically starts the stream, recovers from overruns (EPIPE),
+// and loops until the buffer is filled with the requested number of frames or an unrecoverable error occurs.
 // Returns the number of frames actually read.
 func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) == 0 {
 		return 0, p.setError(nil, "cannot read from a playback device")
 	}
+
 	if (p.flags & PCM_MMAP) != 0 {
 		return 0, p.setError(nil, "use MmapRead for mmap devices")
 	}
@@ -579,6 +622,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 	if err != nil {
 		return 0, p.setError(err, "invalid buffer type for ReadI")
 	}
+
 	requiredBytes := PcmFramesToBytes(p, frames)
 	if byteLen < requiredBytes {
 		return 0, p.setError(nil, "buffer too small: needs %d bytes, got %d", requiredBytes, byteLen)
@@ -588,33 +632,71 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		return 0, nil
 	}
 
-	xfer := sndXferi{Frames: SndPcmUframesT(frames)}
-	if reflect.ValueOf(buffer).Len() > 0 {
-		xfer.Buf = reflect.ValueOf(buffer).Index(0).Addr().Pointer()
-	}
 	defer runtime.KeepAlive(buffer)
 
-	if p.state != PCM_STATE_RUNNING {
-		if err := p.Start(); err != nil {
+	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
+		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
 	}
 
-	err = ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+	bufferPtr := uintptr(0)
+	if reflect.ValueOf(buffer).Len() > 0 {
+		bufferPtr = reflect.ValueOf(buffer).Index(0).Addr().Pointer()
+	}
 
-	if err != nil && (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
-		if errRec := p.xrunRecover(err); errRec != nil {
-			return 0, errRec
+	framesRead := uint32(0)
+	for framesRead < frames {
+		remainingFrames := frames - framesRead
+		offsetBytes := PcmFramesToBytes(p, framesRead)
+
+		xfer := sndXferi{
+			Frames: SndPcmUframesT(remainingFrames),
+			Buf:    bufferPtr + uintptr(offsetBytes),
 		}
-		err = ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+
+		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+
+		if xfer.Result > 0 {
+			framesRead += uint32(xfer.Result)
+		}
+
+		if err != nil {
+			var errno syscall.Errno
+			if errors.As(err, &errno) {
+				// For non-blocking mode, EAGAIN means no data is available.
+				// Stop and return the frames read so far.
+				if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(errno, syscall.EAGAIN) {
+					break
+				}
+
+				// EINTR is a temporary interruption; just retry the operation.
+				if errors.Is(errno, syscall.EINTR) {
+					continue
+				}
+
+				// For overruns (EPIPE), try to recover if not disabled.
+				if (p.flags&PCM_NORESTART) == 0 && errors.Is(errno, syscall.EPIPE) {
+					if errRec := p.xrunRecover(err); errRec != nil {
+						return int(framesRead), errRec
+					}
+
+					continue
+				}
+			}
+
+			// For any other error, it's unrecoverable.
+			p.state = PCM_STATE_XRUN
+		
+			return int(framesRead), p.setError(err, "ioctl READI_FRAMES failed")
+		}
+
+		if p.state != PCM_STATE_RUNNING {
+			p.state = PCM_STATE_RUNNING
+		}
 	}
 
-	if err != nil {
-		p.state = PCM_STATE_XRUN
-		return 0, p.setError(err, "ioctl READI_FRAMES failed")
-	}
-
-	return xfer.Result, nil
+	return int(framesRead), nil
 }
 
 // ReadN reads non-interleaved audio data from a capture PCM device.
@@ -627,9 +709,11 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) == 0 {
 		return 0, p.setError(nil, "cannot read from a playback device")
 	}
+
 	if (p.flags & PCM_MMAP) != 0 {
 		return 0, p.setError(nil, "ReadN is not for mmap devices")
 	}
+
 	if uint32(len(buffers)) != p.config.Channels {
 		return 0, p.setError(nil, "incorrect number of channels in buffers: expected %d, got %d", p.config.Channels, len(buffers))
 	}
@@ -657,8 +741,8 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 	}
 	defer runtime.KeepAlive(pointers)
 
-	if p.state != PCM_STATE_RUNNING {
-		if err := p.Start(); err != nil {
+	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
+		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
 	}
@@ -676,6 +760,10 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 		return 0, p.setError(err, "ioctl READN_FRAMES failed")
 	}
 
+	if p.state != PCM_STATE_RUNNING {
+		p.state = PCM_STATE_RUNNING
+	}
+
 	return xfer.Result, nil
 }
 
@@ -688,12 +776,14 @@ func (p *PCM) Write(data any) error {
 	if err != nil {
 		return p.setError(err, "invalid data type for Write")
 	}
+
 	frames := PcmBytesToFrames(p, byteLen)
 
 	ret, err := p.WriteI(data, frames)
 	if err != nil {
 		return err
 	}
+
 	if uint32(ret) != frames {
 		return p.setError(syscall.EIO, "failed to write all frames")
 	}
@@ -710,12 +800,14 @@ func (p *PCM) Read(data any) error {
 	if err != nil {
 		return p.setError(err, "invalid data type for Read")
 	}
+
 	frames := PcmBytesToFrames(p, byteLen)
 
 	ret, err := p.ReadI(data, frames)
 	if err != nil {
 		return err
 	}
+
 	if uint32(ret) != frames {
 		return p.setError(syscall.EIO, "failed to read all frames")
 	}
@@ -733,9 +825,20 @@ func (p *PCM) Prepare() error {
 	}
 
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_PREPARE, 0); err != nil {
+		// For linked streams, one stream might be prepared by an operation
+		// on the other, causing this call to return EBUSY. We can treat
+		// EBUSY as a success in this context, as the stream state is now
+		// effectively PREPARED.
+		if errors.Is(err, syscall.EBUSY) {
+			p.state = PCM_STATE_PREPARED
+
+			return nil
+		}
+
 		// If prepare fails, the stream is in an undefined state.
 		// Mark it as SETUP so the next operation can try again from a known state.
 		p.state = PCM_STATE_SETUP
+
 		return p.setError(err, "ioctl PREPARE failed")
 	}
 
@@ -809,7 +912,7 @@ func (p *PCM) Pause(enable bool) error {
 	if enable {
 		p.state = PCM_STATE_PAUSED
 	} else if p.state == PCM_STATE_PAUSED {
-		p.state = PCM_STATE_RUNNING // Resuming should put it back in RUNNING
+		p.state = PCM_STATE_RUNNING
 	}
 
 	return nil
@@ -822,7 +925,7 @@ func (p *PCM) Resume() error {
 		return p.setError(err, "ioctl RESUME failed")
 	}
 
-	p.state = PCM_STATE_PREPARED // After resume, stream is PREPARED, not running
+	p.state = PCM_STATE_PREPARED // After resume, stream is PREPARED, not RUNNING
 
 	return nil
 }
@@ -1052,6 +1155,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			if errors.Is(err, syscall.EPIPE) {
 				continue
 			}
+
 			return offset, err
 		}
 
@@ -1120,6 +1224,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 	if (p.flags & PCM_MMAP) == 0 {
 		return 0, fmt.Errorf("MmapRead can only be used with MMAP streams")
 	}
+
 	if (p.flags & PCM_IN) == 0 {
 		return 0, fmt.Errorf("cannot read from a playback device")
 	}
@@ -1149,6 +1254,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 			if errors.Is(err, syscall.EPIPE) {
 				continue
 			}
+
 			return offset, err
 		}
 
@@ -1489,13 +1595,16 @@ func checkSlice(data any) (byteLen uint32, err error) {
 	if data == nil {
 		return 0, errors.New("data cannot be nil")
 	}
+
 	rv := reflect.ValueOf(data)
 	if rv.Kind() != reflect.Slice {
 		return 0, fmt.Errorf("expected a slice, got %T", data)
 	}
+
 	if rv.Len() == 0 {
 		return 0, nil
 	}
+
 	switch rv.Type().Elem().Kind() {
 	case reflect.Int8, reflect.Uint8,
 		reflect.Int16, reflect.Uint16,
@@ -1505,6 +1614,7 @@ func checkSlice(data any) (byteLen uint32, err error) {
 	default:
 		return 0, fmt.Errorf("unsupported slice element type: %s", rv.Type().Elem().Kind())
 	}
+
 	return uint32(rv.Len()) * uint32(rv.Type().Elem().Size()), nil
 }
 
@@ -1514,9 +1624,11 @@ func checkSliceAndGetData(data any) (ptr unsafe.Pointer, byteLen uint32, err err
 	if err != nil {
 		return nil, 0, err
 	}
+
 	if byteLen > 0 {
 		ptr = unsafe.Pointer(reflect.ValueOf(data).Index(0).Addr().Pointer())
 	}
+
 	return ptr, byteLen, nil
 }
 
