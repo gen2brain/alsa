@@ -392,6 +392,16 @@ func testIntegerCtl(t *testing.T, ctl *alsa.MixerCtl) {
 		return // Skip if value cannot be read
 	}
 
+	isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
+	if isWritable {
+		defer func() {
+			err := ctl.SetValue(0, originalVal)
+			if err != nil {
+				t.Logf("Warning: failed to restore original value for control '%s': %v", ctl.Name(), err)
+			}
+		}()
+	}
+
 	// Test Percent
 	pct, err := ctl.Percent(0)
 	assert.NoError(t, err, "ctl.Percent() should succeed")
@@ -401,10 +411,9 @@ func testIntegerCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	assert.Equal(t, expectedPct, pct, "Calculated percent does not match returned percent")
 
 	// Test SetPercent (only if writable)
-	if (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) == 0 {
+	if !isWritable {
 		return
 	}
-	defer ctl.SetPercent(0, pct) // Ensure the original value is restored
 
 	// Try to set to 100%
 	err = ctl.SetPercent(0, 100)
@@ -434,6 +443,16 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 		return // Cannot read initial value
 	}
 
+	isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
+	if isWritable {
+		defer func() {
+			err := ctl.SetValue(0, originalValue)
+			if err != nil {
+				t.Logf("Warning: failed to restore original enum value for control '%s': %v", ctl.Name(), err)
+			}
+		}()
+	}
+
 	originalStr, err := ctl.EnumString(uint(originalValue))
 	require.NoError(t, err)
 
@@ -443,10 +462,9 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	assert.Equal(t, originalStr, valueStr)
 
 	// Test setting by string (if writable)
-	if (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) == 0 {
+	if !isWritable {
 		return
 	}
-	defer ctl.SetEnumByString(originalStr) // Restore original value
 
 	// Find a different enum string to set
 	targetStr := ""
@@ -560,27 +578,55 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 		return
 	}
 
-	originalPct, err := targetCtl.Percent(0)
+	// Read the original integer value to ensure accurate restoration.
+	originalVal, err := targetCtl.Value(0)
 	if err != nil {
-		t.Skipf("Skipping event test: cannot get percent for ctl '%s': %v", targetCtl.Name(), err)
+		t.Skipf("Skipping event test: cannot get value for ctl '%s': %v", targetCtl.Name(), err)
 		return
 	}
-	defer targetCtl.SetPercent(0, originalPct) // Ensure we restore the value
+	// Defer the restoration of the original value.
+	defer func() {
+		err := targetCtl.SetValue(0, originalVal)
+		if err != nil {
+			t.Logf("Warning: failed to restore original value for event test ctl '%s': %v", targetCtl.Name(), err)
+		}
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Change the control value in a separate goroutine
+	// Change the control value in a separate goroutine to trigger an event.
 	go func() {
 		defer wg.Done()
 		time.Sleep(50 * time.Millisecond)
 
-		newPct := 0
-		if originalPct < 50 {
-			newPct = 100
+		// Try to toggle the value between its min and max to guarantee a change.
+		minVal, errMin := targetCtl.RangeMin()
+		maxVal, errMax := targetCtl.RangeMax()
+
+		newValue := -1 // Sentinel for "not set"
+
+		if errMin == nil && errMax == nil && maxVal > minVal {
+			if originalVal == minVal {
+				newValue = maxVal
+			} else {
+				newValue = minVal
+			}
 		}
 
-		_ = targetCtl.SetPercent(0, newPct)
+		if newValue != -1 {
+			_ = targetCtl.SetValue(0, newValue)
+		} else {
+			// Fallback to percent if range is not available or invalid.
+			originalPct, err := targetCtl.Percent(0)
+			if err == nil {
+				newPct := 0
+				if originalPct < 50 {
+					newPct = 100
+				}
+				_ = targetCtl.SetPercent(0, newPct)
+			}
+		}
 	}()
 
 	// Wait for the event in the main test goroutine
@@ -600,8 +646,14 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 
 	wg.Wait()
 
-	// Test ConsumeEvent
-	_ = targetCtl.SetPercent(0, originalPct)
+	// Test ConsumeEvent: trigger another event by restoring the original value, then discard it.
+	err = targetCtl.SetValue(0, originalVal)
+	if err != nil {
+		t.Logf("Could not set value to trigger consume event: %v", err)
+
+		return
+	}
+
 	time.Sleep(50 * time.Millisecond) // Give time for event to propagate
 
 	ready, _ = m.WaitEvent(100)
