@@ -687,7 +687,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 			// For any other error, it's unrecoverable.
 			p.state = PCM_STATE_XRUN
-		
+
 			return int(framesRead), p.setError(err, "ioctl READI_FRAMES failed")
 		}
 
@@ -911,7 +911,7 @@ func (p *PCM) Pause(enable bool) error {
 
 	if enable {
 		p.state = PCM_STATE_PAUSED
-	} else if p.state == PCM_STATE_PAUSED {
+	} else {
 		p.state = PCM_STATE_RUNNING
 	}
 
