@@ -106,6 +106,7 @@ var (
 	SNDRV_PCM_IOCTL_READI_FRAMES  uintptr
 	SNDRV_PCM_IOCTL_WRITEN_FRAMES uintptr
 	SNDRV_PCM_IOCTL_READN_FRAMES  uintptr
+	SNDRV_PCM_IOCTL_STATUS        uintptr
 
 	// Control IOCTLs
 	SNDRV_CTL_IOCTL_CARD_INFO        uintptr
@@ -135,7 +136,7 @@ func init() {
 
 	// Synchronization IOCTLs
 	SNDRV_PCM_IOCTL_HWSYNC = io('A', 0x22)
-	SNDRV_PCM_IOCTL_DELAY = ior('A', 0x21, unsafe.Sizeof(sndPcmSframesT(0)))
+	SNDRV_PCM_IOCTL_DELAY = ior('A', 0x21, unsafe.Sizeof(SndPcmSframesT(0)))
 	SNDRV_PCM_IOCTL_TTSTAMP = iow('A', 0x03, unsafe.Sizeof(int32(0)))
 	SNDRV_PCM_IOCTL_SYNC_PTR = iowr('A', 0x23, unsafe.Sizeof(sndPcmSyncPtr{}))
 
@@ -148,6 +149,7 @@ func init() {
 	SNDRV_PCM_IOCTL_READI_FRAMES = ior('A', 0x51, unsafe.Sizeof(sndXferi{}))
 	SNDRV_PCM_IOCTL_WRITEN_FRAMES = iow('A', 0x52, unsafe.Sizeof(sndXfern{}))
 	SNDRV_PCM_IOCTL_READN_FRAMES = ior('A', 0x53, unsafe.Sizeof(sndXfern{}))
+	SNDRV_PCM_IOCTL_STATUS = ior('A', 0x20, unsafe.Sizeof(sndPcmStatus{}))
 
 	// Control IOCTLs ('U' for UAC)
 	SNDRV_CTL_IOCTL_CARD_INFO = ior('U', 0x01, unsafe.Sizeof(sndCtlCardInfo{}))
