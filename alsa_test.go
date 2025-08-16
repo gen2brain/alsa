@@ -1,13 +1,10 @@
 package alsa_test
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/gen2brain/alsa"
 )
 
 var (
@@ -46,46 +43,6 @@ func findCard(name string) int {
 	return -1
 }
 
-// findDevices dynamically finds the first available playback and capture devices on the loopback card.
-func findDevices() error {
-	if loopbackCard == -1 {
-		return errors.New("loopback card not found")
-	}
-
-	var playbackDev, captureDev = -1, -1
-
-	// Find the first available playback device on the card.
-	for i := 0; i < 8; i++ {
-		params, err := alsa.PcmParamsGet(uint(loopbackCard), uint(i), alsa.PCM_OUT)
-		if err == nil {
-			params.Free()
-			playbackDev = i
-
-			break
-		}
-	}
-
-	// Find the first available capture device on the card.
-	for i := 0; i < 8; i++ {
-		params, err := alsa.PcmParamsGet(uint(loopbackCard), uint(i), alsa.PCM_IN)
-		if err == nil {
-			params.Free()
-			captureDev = i
-		
-			break
-		}
-	}
-
-	if playbackDev == -1 || captureDev == -1 {
-		return fmt.Errorf("could not find a suitable playback/capture device pair on card %d", loopbackCard)
-	}
-
-	loopbackPlaybackDevice = playbackDev
-	loopbackCaptureDevice = captureDev
-
-	return nil
-}
-
 // TestMain checks for the loopback device before running tests.
 func TestMain(m *testing.M) {
 	loopbackCard = findCard("Loopback")
@@ -102,10 +59,8 @@ func TestMain(m *testing.M) {
 		os.Exit(0) // Exit successfully, skipping tests.
 	}
 
-	if err := findDevices(); err != nil {
-		fmt.Println(err)
-		os.Exit(0) // Exit successfully, skipping tests.
-	}
+	loopbackPlaybackDevice = 0
+	loopbackCaptureDevice = 1
 
 	os.Exit(m.Run())
 }
