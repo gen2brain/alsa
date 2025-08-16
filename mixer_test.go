@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -566,8 +567,12 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 	}
 	defer targetCtl.SetPercent(0, originalPct) // Ensure we restore the value
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	// Change the control value in a separate goroutine
 	go func() {
+		defer wg.Done()
 		time.Sleep(50 * time.Millisecond)
 
 		newPct := 0
@@ -592,6 +597,8 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 		assert.Equal(t, alsa.SNDRV_CTL_EVENT_MASK_VALUE, event.Type, "Event type should be a value change")
 		assert.Equal(t, targetCtl.ID(), event.ControlID, "Event control ID should match the control that was changed")
 	}
+
+	wg.Wait()
 
 	// Test ConsumeEvent
 	_ = targetCtl.SetPercent(0, originalPct)
