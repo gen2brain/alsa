@@ -49,7 +49,7 @@ const (
 
 // PcmState defines the current state of a PCM stream.
 // These values correspond to the SNDRV_PCM_STATE_* constants.
-type PcmState int
+type PcmState int32
 
 const (
 	PCM_STATE_OPEN         PcmState = 0 // Stream is open.
