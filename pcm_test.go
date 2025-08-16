@@ -65,6 +65,7 @@ func TestPcmFormatToBits(t *testing.T) {
 // from multiple tests trying to access the same ALSA device concurrently.
 func TestPcmHardware(t *testing.T) {
 	t.Run("PcmOpenAndClose", testPcmOpenAndClose)
+	t.Run("PcmOpenByName", testPcmOpenByName)
 	t.Run("PcmPlaybackStartup", testPcmPlaybackStartup)
 	t.Run("PcmGetters", testPcmGetters)
 	t.Run("PcmFramesBytesConvert", testPcmFramesBytesConvert)
@@ -75,6 +76,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmGetDelay", testPcmGetDelay)
 	t.Run("PcmReadiTiming", testPcmReadiTiming)
 	t.Run("PcmMmapWrite", testPcmMmapWrite)
+	t.Run("PcmStop", testPcmStop)
 	t.Run("PcmParams", testPcmParams)
 	t.Run("SetConfig", testSetConfig)
 	t.Run("PcmLink", testPcmLink)
@@ -140,23 +142,86 @@ func testPcmOpenAndClose(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// Test open by name
-	t.Run("OpenByName", func(t *testing.T) {
-		name := fmt.Sprintf("hw:%d,%d", loopbackCard, loopbackPlaybackDevice)
-		pcm, err := alsa.PcmOpenByName(name, alsa.PCM_OUT, &kDefaultConfig)
-		if err != nil {
-			t.Fatalf("PcmOpenByName failed: %v", err)
-		}
+func testPcmOpenByName(t *testing.T) {
+	// Test valid name
+	name := fmt.Sprintf("hw:%d,%d", loopbackCard, loopbackPlaybackDevice)
+	pcm, err := alsa.PcmOpenByName(name, alsa.PCM_OUT, &kDefaultConfig)
+	require.NoError(t, err, "PcmOpenByName failed for a valid name")
+	require.NotNil(t, pcm)
+	require.True(t, pcm.IsReady())
+	pcm.Close()
 
-		if !pcm.IsReady() {
-			t.Fatal("pcm.IsReady() returned false after successful open by name")
-		}
+	// Test invalid names
+	_, err = alsa.PcmOpenByName("invalid_name", alsa.PCM_OUT, &kDefaultConfig)
+	require.Error(t, err, "PcmOpenByName should fail for a name without 'hw:' prefix")
 
-		if err := pcm.Close(); err != nil {
-			t.Fatalf("pcm.Close() failed: %v", err)
+	_, err = alsa.PcmOpenByName("hw:foo,bar", alsa.PCM_OUT, &kDefaultConfig)
+	require.Error(t, err, "PcmOpenByName should fail for non-numeric card/device")
+
+	_, err = alsa.PcmOpenByName("hw:0", alsa.PCM_OUT, &kDefaultConfig)
+	require.Error(t, err, "PcmOpenByName should fail for incomplete name")
+}
+
+func testPcmStop(t *testing.T) {
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	require.NoError(t, err)
+	defer pcm.Close()
+
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	require.NoError(t, err)
+	// No defer on capturePcm.Close(), we manage it manually with the goroutine.
+
+	err = pcm.Link(capturePcm)
+	if err != nil {
+		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
+	}
+	defer pcm.Unlink()
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	wg.Add(1)
+
+	// Goroutine to consume data to prevent the writer from blocking.
+	go func() {
+		defer wg.Done()
+		buffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
+		for {
+			select {
+			case <-done:
+				// Close the capture PCM from within the goroutine that uses it.
+				capturePcm.Close()
+				return
+			default:
+				// This read will block until data is written or the stream is closed.
+				_, err := capturePcm.ReadI(buffer, capturePcm.PeriodSize())
+				if err != nil {
+					// Expect an error when the stream is closed.
+					return
+				}
+			}
 		}
-	})
+	}()
+
+	// Write some data to start the stream
+	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
+	_, err = pcm.WriteI(buffer, pcm.PeriodSize())
+	require.NoError(t, err)
+
+	state, _ := pcm.State()
+	require.Equal(t, alsa.PCM_STATE_RUNNING, state, "Stream should be in RUNNING state after writing")
+
+	// Now stop the stream
+	err = pcm.Stop()
+	require.NoError(t, err, "pcm.Stop() failed")
+
+	state, _ = pcm.State()
+	require.Equal(t, alsa.PCM_STATE_SETUP, state, "Stream should be in SETUP state after stopping")
+
+	// Cleanly shut down the goroutine.
+	close(done)
+	wg.Wait()
 }
 
 func testPcmPlaybackStartup(t *testing.T) {
