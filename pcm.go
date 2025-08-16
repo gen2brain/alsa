@@ -312,6 +312,7 @@ func (p *PCM) SetConfig(config *Config) error {
 	paramSetMask(hwParams, PCM_PARAM_SUBFORMAT, 0) // SNDRV_PCM_SUBFORMAT_STD
 	paramSetMin(hwParams, PCM_PARAM_SAMPLE_BITS, pcmFormatToRealBits(config.Format))
 	paramSetInt(hwParams, PCM_PARAM_CHANNELS, config.Channels)
+
 	// Use paramSetMin for Rate to be more flexible. This asks the driver for a rate
 	// of *at least* the requested value, allowing it to choose the nearest supported rate.
 	paramSetMin(hwParams, PCM_PARAM_RATE, config.Rate)
@@ -335,10 +336,17 @@ func (p *PCM) SetConfig(config *Config) error {
 	}
 
 	// Update our config with the refined parameters from the driver.
+	p.config.Channels = paramGetInt(hwParams, PCM_PARAM_CHANNELS)
 	p.config.Rate = paramGetInt(hwParams, PCM_PARAM_RATE)
 	p.config.PeriodSize = paramGetInt(hwParams, PCM_PARAM_PERIOD_SIZE)
 	p.config.PeriodCount = paramGetInt(hwParams, PCM_PARAM_PERIODS)
 	p.bufferSize = p.config.PeriodSize * p.config.PeriodCount
+
+	// Sanity check for essential parameters
+	if p.config.Channels == 0 || p.config.Rate == 0 || p.config.PeriodSize == 0 || p.config.PeriodCount == 0 {
+		return p.setError(nil, "driver finalized invalid PCM configuration (Channels=%d, Rate=%d, PeriodSize=%d, PeriodCount=%d)",
+			p.config.Channels, p.config.Rate, p.config.PeriodSize, p.config.PeriodCount)
+	}
 
 	// 2. SW_PARAMS
 	swParams := &sndPcmSwParams{}
@@ -909,7 +917,7 @@ func (p *PCM) Pause(enable bool) error {
 		arg = 0 // Resume
 	}
 
-	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_PAUSE, uintptr(unsafe.Pointer(&arg))); err != nil {
+	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_PAUSE, uintptr(arg)); err != nil {
 		return p.setError(err, "ioctl PAUSE failed")
 	}
 
@@ -1061,6 +1069,12 @@ func (p *PCM) KernelState() PcmState {
 		}
 		// For other errors (e.g., device unplugged), report as disconnected.
 		return PCM_STATE_DISCONNECTED
+	}
+
+	// If ioctlSync succeeded but determined that SYNC_PTR/HWSYNC is not supported (p.noSyncPtr=true),
+	// the kernel might not update mmapStatus.State. We must rely on the cached state.
+	if p.noSyncPtr {
+		return p.state
 	}
 
 	// The state is updated in mmapStatus by ioctlSync.
@@ -1240,12 +1254,6 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 	offset := 0
 	remainingBytes := int(dataByteLen)
-
-	if p.state != PCM_STATE_RUNNING {
-		if err := p.Start(); err != nil {
-			return 0, err
-		}
-	}
 
 	for remainingBytes > 0 {
 		wantFrames := PcmBytesToFrames(p, uint32(remainingBytes))
@@ -1783,11 +1791,10 @@ func paramGetInt(p *sndPcmHwParams, param PcmParam) uint32 {
 
 	// The interval array index is the parameter value minus the value of the first interval param.
 	interval := &p.Intervals[param-PCM_PARAM_SAMPLE_BITS]
-	if (interval.Flags & SNDRV_PCM_INTERVAL_INTEGER) != 0 {
-		return interval.MaxVal
-	}
 
-	return 0
+	// Match tinyalsa behavior: read the MinVal of the interval.
+	// The driver finalizes the configuration by narrowing the interval.
+	return interval.MinVal
 }
 
 // PcmParamsGet queries the hardware parameters for a given PCM device without fully opening it.
