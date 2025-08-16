@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -43,11 +44,19 @@ type PCM struct {
 	syncPtr            *sndPcmSyncPtr // Used for non-mmap streams or if mmap for status/control fails
 	syncPtrIsMmapped   bool
 	boundary           SndPcmUframesT
-	xruns              int      // Counter for overruns/underruns
-	noirqFramesPerMsec uint32   // For PCM_NOIRQ calculation
-	state              PcmState // Tracks the stream state, replacing the 'running' boolean.
-	lastError          string   // For pcm_get_error() equivalent
-	noSyncPtr          bool     // Flag to indicate that SYNC_PTR is not supported.
+	xruns              int    // Counter for overruns/underruns
+	noirqFramesPerMsec uint32 // For PCM_NOIRQ calculation
+	state              int32  // PcmState: Use getState/setState for atomic access.
+	lastError          string // For pcm_get_error() equivalent
+	noSyncPtr          bool   // Flag to indicate that SYNC_PTR is not supported.
+}
+
+func (p *PCM) getState() PcmState {
+	return PcmState(atomic.LoadInt32(&p.state))
+}
+
+func (p *PCM) setState(s PcmState) {
+	atomic.StoreInt32(&p.state, int32(s))
 }
 
 // PcmParams represents the hardware capabilities of a PCM device.
@@ -122,7 +131,7 @@ func PcmOpen(card, device uint, flags PcmFlag, config *Config) (*PCM, error) {
 		flags:     flags,
 		subdevice: info.Subdevice,
 		noSyncPtr: false,
-		state:     PCM_STATE_OPEN,
+		state:     int32(PCM_STATE_OPEN),
 	}
 
 	// If no config is provided, use a default configuration.
@@ -160,6 +169,7 @@ func PcmOpen(card, device uint, flags PcmFlag, config *Config) (*PCM, error) {
 		var arg int32 = 1
 		if err := ioctl(pcm.file.Fd(), SNDRV_PCM_IOCTL_TTSTAMP, uintptr(unsafe.Pointer(&arg))); err != nil {
 			pcm.Close()
+
 			return nil, pcm.setError(err, "ioctl TTSTAMP failed")
 		}
 	}
@@ -404,7 +414,7 @@ func (p *PCM) SetConfig(config *Config) error {
 
 	// After HW_PARAMS and SW_PARAMS, the stream is in the SETUP state.
 	// It must be explicitly prepared before starting.
-	p.state = PCM_STATE_SETUP
+	p.setState(PCM_STATE_SETUP)
 
 	return nil
 }
@@ -417,7 +427,7 @@ func (p *PCM) xrunRecover(err error) error {
 
 	p.xruns++
 	if (p.flags & PCM_NORESTART) != 0 {
-		p.state = PCM_STATE_XRUN
+		p.setState(PCM_STATE_XRUN)
 
 		return p.setError(err, "xrun occurred with PCM_NORESTART")
 	}
@@ -425,7 +435,7 @@ func (p *PCM) xrunRecover(err error) error {
 	// To recover, we must stop the stream, then re-prepare it.
 	// Stop() calls DROP and sets state to SETUP.
 	if stopErr := p.Stop(); stopErr != nil {
-		p.state = PCM_STATE_XRUN // Can't recover
+		p.setState(PCM_STATE_XRUN) // Can't recover
 
 		return p.setError(stopErr, "xrun recovery failed: could not stop stream")
 	}
@@ -433,7 +443,7 @@ func (p *PCM) xrunRecover(err error) error {
 	// After Stop(), state is SETUP. Now re-prepare.
 	// Prepare() sets state to PREPARED.
 	if prepErr := p.Prepare(); prepErr != nil {
-		p.state = PCM_STATE_XRUN // Can't recover
+		p.setState(PCM_STATE_XRUN) // Can't recover
 
 		return p.setError(prepErr, "xrun recovery failed: could not prepare stream")
 	}
@@ -480,7 +490,8 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	defer runtime.KeepAlive(data)
 
 	// Prepare stream if it's not already running or prepared.
-	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
+	s := p.getState()
+	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
@@ -534,12 +545,12 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 			}
 
 			// For any other error, it's unrecoverable.
-			p.state = PCM_STATE_XRUN
+			p.setState(PCM_STATE_XRUN)
 			return int(framesWritten), p.setError(err, "ioctl WRITEI_FRAMES failed")
 		}
 
-		if p.state != PCM_STATE_RUNNING {
-			p.state = PCM_STATE_RUNNING
+		if p.getState() != PCM_STATE_RUNNING {
+			p.setState(PCM_STATE_RUNNING)
 		}
 	}
 
@@ -587,7 +598,8 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 	}
 	defer runtime.KeepAlive(pointers)
 
-	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
+	s := p.getState()
+	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
@@ -602,13 +614,13 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 	}
 
 	if err != nil {
-		p.state = PCM_STATE_XRUN
+		p.setState(PCM_STATE_XRUN)
 
 		return 0, p.setError(err, "ioctl WRITEN_FRAMES failed")
 	}
 
-	if p.state != PCM_STATE_RUNNING {
-		p.state = PCM_STATE_RUNNING
+	if p.getState() != PCM_STATE_RUNNING {
+		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return xfer.Result, nil
@@ -645,7 +657,8 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 	defer runtime.KeepAlive(buffer)
 
-	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
+	s := p.getState()
+	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
@@ -697,13 +710,13 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 			}
 
 			// For any other error, it's unrecoverable.
-			p.state = PCM_STATE_XRUN
+			p.setState(PCM_STATE_XRUN)
 
 			return int(framesRead), p.setError(err, "ioctl READI_FRAMES failed")
 		}
 
-		if p.state != PCM_STATE_RUNNING {
-			p.state = PCM_STATE_RUNNING
+		if p.getState() != PCM_STATE_RUNNING {
+			p.setState(PCM_STATE_RUNNING)
 		}
 	}
 
@@ -752,7 +765,8 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 	}
 	defer runtime.KeepAlive(pointers)
 
-	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_PREPARED {
+	s := p.getState()
+	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
@@ -767,12 +781,12 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 	}
 
 	if err != nil {
-		p.state = PCM_STATE_XRUN
+		p.setState(PCM_STATE_XRUN)
 		return 0, p.setError(err, "ioctl READN_FRAMES failed")
 	}
 
-	if p.state != PCM_STATE_RUNNING {
-		p.state = PCM_STATE_RUNNING
+	if p.getState() != PCM_STATE_RUNNING {
+		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return xfer.Result, nil
@@ -829,7 +843,8 @@ func (p *PCM) Read(data any) error {
 // Prepare readies the PCM device for I/O operations.
 // This is typically used to recover from an XRUN.
 func (p *PCM) Prepare() error {
-	if p.state == PCM_STATE_PREPARED || p.state == PCM_STATE_RUNNING {
+	s := p.getState()
+	if s == PCM_STATE_PREPARED || s == PCM_STATE_RUNNING {
 		// Calling prepare on an already prepared/running stream is an error in ALSA,
 		// but we can treat it as a no-op to be robust, as the stream is already usable.
 		return nil
@@ -841,19 +856,19 @@ func (p *PCM) Prepare() error {
 		// EBUSY as a success in this context, as the stream state is now
 		// effectively PREPARED.
 		if errors.Is(err, syscall.EBUSY) {
-			p.state = PCM_STATE_PREPARED
+			p.setState(PCM_STATE_PREPARED)
 
 			return nil
 		}
 
 		// If prepare fails, the stream is in an undefined state.
 		// Mark it as SETUP so the next operation can try again from a known state.
-		p.state = PCM_STATE_SETUP
+		p.setState(PCM_STATE_SETUP)
 
 		return p.setError(err, "ioctl PREPARE failed")
 	}
 
-	p.state = PCM_STATE_PREPARED
+	p.setState(PCM_STATE_PREPARED)
 
 	return nil
 }
@@ -863,7 +878,7 @@ func (p *PCM) Prepare() error {
 func (p *PCM) startUnconditional() error {
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
 		if errors.Is(err, syscall.EPIPE) {
-			p.state = PCM_STATE_XRUN
+			p.setState(PCM_STATE_XRUN)
 			p.xruns++
 
 			return p.setError(err, "ioctl START failed with xrun")
@@ -874,7 +889,7 @@ func (p *PCM) startUnconditional() error {
 		return p.setError(err, "ioctl START failed")
 	}
 
-	p.state = PCM_STATE_RUNNING
+	p.setState(PCM_STATE_RUNNING)
 
 	return nil
 }
@@ -882,11 +897,11 @@ func (p *PCM) startUnconditional() error {
 // Start explicitly starts the PCM stream.
 // It ensures the stream is prepared before starting.
 func (p *PCM) Start() error {
-	if p.state == PCM_STATE_RUNNING {
+	if p.getState() == PCM_STATE_RUNNING {
 		return nil
 	}
 
-	if p.state != PCM_STATE_PREPARED {
+	if p.getState() != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return err
 		}
@@ -901,7 +916,7 @@ func (p *PCM) Stop() error {
 		return p.setError(err, "ioctl DROP failed")
 	}
 
-	p.state = PCM_STATE_SETUP
+	p.setState(PCM_STATE_SETUP)
 
 	return nil
 }
@@ -922,9 +937,9 @@ func (p *PCM) Pause(enable bool) error {
 	}
 
 	if enable {
-		p.state = PCM_STATE_PAUSED
+		p.setState(PCM_STATE_PAUSED)
 	} else {
-		p.state = PCM_STATE_RUNNING
+		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return nil
@@ -937,7 +952,7 @@ func (p *PCM) Resume() error {
 		return p.setError(err, "ioctl RESUME failed")
 	}
 
-	p.state = PCM_STATE_PREPARED // After resume, stream is PREPARED, not RUNNING
+	p.setState(PCM_STATE_PREPARED) // After resume, stream is PREPARED, not RUNNING
 
 	return nil
 }
@@ -950,11 +965,11 @@ func (p *PCM) Drain() error {
 	}
 
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_DRAIN, 0); err != nil {
-		p.state = PCM_STATE_XRUN
+		p.setState(PCM_STATE_XRUN)
 		return p.setError(err, "ioctl DRAIN failed")
 	}
 
-	p.state = PCM_STATE_SETUP
+	p.setState(PCM_STATE_SETUP)
 
 	return nil
 }
@@ -1028,8 +1043,9 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 	revents := pfd[0].Revents
 
 	if (revents & (unix.POLLERR | unix.POLLNVAL)) != 0 {
-		p.state = p.KernelState()
-		if p.state == PCM_STATE_XRUN || p.state == PCM_STATE_SUSPENDED {
+		newState := p.KernelState()
+		p.setState(newState)
+		if newState == PCM_STATE_XRUN || newState == PCM_STATE_SUSPENDED {
 			if (p.flags & PCM_NORESTART) != 0 {
 				return false, p.setError(syscall.EPIPE, "XRUN/suspend detected with PCM_NORESTART")
 			}
@@ -1058,7 +1074,7 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 func (p *PCM) KernelState() PcmState {
 	if p.mmapStatus == nil {
 		// Cannot query kernel without status struct, return cached state.
-		return p.state
+		return p.getState()
 	}
 
 	// Use flags=0 just to read the current status from the kernel, matching tinyalsa's pcm_state().
@@ -1074,7 +1090,7 @@ func (p *PCM) KernelState() PcmState {
 	// If ioctlSync succeeded but determined that SYNC_PTR/HWSYNC is not supported (p.noSyncPtr=true),
 	// the kernel might not update mmapStatus.State. We must rely on the cached state.
 	if p.noSyncPtr {
-		return p.state
+		return p.getState()
 	}
 
 	// The state is updated in mmapStatus by ioctlSync.
@@ -1090,7 +1106,7 @@ func (p *PCM) State() (PcmState, error) {
 		return PCM_STATE_DISCONNECTED, errors.New("pcm is nil")
 	}
 
-	return p.state, nil
+	return p.getState(), nil
 }
 
 // AvailUpdate synchronizes the PCM state with the kernel and returns the number of available frames.
@@ -1106,15 +1122,15 @@ func (p *PCM) AvailUpdate() (int, error) {
 		// If SYNC_PTR returns EPIPE (xrun), we should update the xrun count and return the error.
 		// Use errors.Is for robust checking.
 		if errors.Is(err, syscall.EPIPE) {
-			p.state = PCM_STATE_XRUN
+			p.setState(PCM_STATE_XRUN)
 			p.xruns++
 		}
 
 		return 0, err
 	}
 
-	p.state = PcmState(p.mmapStatus.State)
-	if p.state == PCM_STATE_XRUN {
+	p.setState(PcmState(p.mmapStatus.State))
+	if p.getState() == PCM_STATE_XRUN {
 		p.xruns++
 	}
 
@@ -1219,7 +1235,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		// This logic now strictly matches tinyalsa: the stream is only auto-started
 		// if it's in the PREPARED state. The user must call pcm.Prepare() before
 		// the first MmapWrite call.
-		if p.state == PCM_STATE_PREPARED {
+		if p.getState() == PCM_STATE_PREPARED {
 			avail, availErr := p.AvailUpdate()
 			if availErr == nil {
 				framesInBuf := p.bufferSize - uint32(avail)
@@ -1342,7 +1358,7 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 		return nil, 0, 0, syncErr
 	}
 
-	p.state = PcmState(p.mmapStatus.State)
+	p.setState(PcmState(p.mmapStatus.State))
 
 	offset := p.mmapControl.ApplPtr % SndPcmUframesT(p.bufferSize)
 	offsetFrames = uint32(offset)
@@ -1422,7 +1438,7 @@ func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
 			return
 		}
 
-		p.state = PcmState(p.mmapStatus.State)
+		p.setState(PcmState(p.mmapStatus.State))
 
 		var currentAvail SndPcmUframesT
 		if (p.flags & PCM_IN) != 0 {
@@ -1472,10 +1488,10 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 		return
 	}
 
-	p.state = PcmState(p.mmapStatus.State)
-
-	if p.state != PCM_STATE_RUNNING && p.state != PCM_STATE_DRAINING {
-		err = fmt.Errorf("invalid stream state for HWPtr: %v", p.state)
+	p.setState(PcmState(p.mmapStatus.State))
+	s := p.getState()
+	if s != PCM_STATE_RUNNING && s != PCM_STATE_DRAINING {
+		err = fmt.Errorf("invalid stream state for HWPtr: %v", s)
 
 		return
 	}
