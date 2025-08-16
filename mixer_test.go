@@ -135,6 +135,9 @@ func runCardTests(t *testing.T, card uint) {
 	t.Run("ControlAccess", func(t *testing.T) { testControlAccess(t, mixer) })
 	t.Run("ControlProperties", func(t *testing.T) { testControlProperties(t, mixer) })
 	t.Run("ControlValues", func(t *testing.T) { testControlValues(t, mixer) })
+	t.Run("ControlNotFound", func(t *testing.T) { testMixerControlNotFound(t, mixer) })
+	t.Run("CtlByNameAndDevice", func(t *testing.T) { testMixerCtlByNameAndDevice(t, mixer) })
+	t.Run("CtlTypeString", func(t *testing.T) { testMixerCtlTypeString(t, mixer) })
 }
 
 func testMixerInfo(t *testing.T, m *alsa.Mixer) {
@@ -660,5 +663,103 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 	if ready {
 		err = m.ConsumeEvent()
 		assert.NoError(t, err, "ConsumeEvent should succeed")
+	}
+}
+
+func testMixerControlNotFound(t *testing.T, m *alsa.Mixer) {
+	// Test with a name that is highly unlikely to exist
+	nonExistentName := "This Control Really Should Not Exist 12345"
+	_, err := m.CtlByName(nonExistentName)
+	assert.Error(t, err, "CtlByName with a non-existent name should return an error")
+
+	// Test with an out-of-bounds index
+	outOfBoundsIndex := uint(m.NumCtls())
+	_, err = m.CtlByIndex(outOfBoundsIndex)
+	assert.Error(t, err, "CtlByIndex with an out-of-bounds index should return an error")
+
+	// Test with a non-existent numeric ID.
+	// Find the max ID and add 1 to it.
+	maxID := uint32(0)
+	for _, ctl := range m.Ctls {
+		if ctl.ID() > maxID {
+			maxID = ctl.ID()
+		}
+	}
+
+	nonExistentID := maxID + 1
+	_, err = m.Ctl(nonExistentID)
+	assert.Error(t, err, "Ctl with a non-existent ID should return an error")
+}
+
+func testMixerCtlByNameAndDevice(t *testing.T, m *alsa.Mixer) {
+	if m.NumCtls() == 0 {
+		t.Skip("Skipping CtlByNameAndDevice test: no controls found.")
+		return
+	}
+
+	for _, ctl := range m.Ctls {
+		name := ctl.Name()
+		device := ctl.Device()
+
+		foundCtl, err := m.CtlByNameAndDevice(name, device)
+		require.NoError(t, err, "CtlByNameAndDevice should find control '%s' on device %d", name, device)
+		assert.Same(t, ctl, foundCtl, "CtlByNameAndDevice should return the correct control instance")
+	}
+
+	// Test for a control that exists but not on the specified device
+	if len(m.Ctls) > 0 {
+		firstCtl := m.Ctls[0]
+		name := firstCtl.Name()
+
+		// Find a device number that is NOT associated with this control name
+		nonExistentDevice := uint32(9999) // Start with a high number
+		isUnique := false
+
+		for !isUnique {
+			found := false
+			for _, ctl := range m.Ctls {
+				if ctl.Name() == name && ctl.Device() == nonExistentDevice {
+					nonExistentDevice++ // Increment if we somehow guessed an existing one
+					found = true
+
+					break
+				}
+			}
+			if !found {
+				isUnique = true
+			}
+		}
+
+		_, err := m.CtlByNameAndDevice(name, nonExistentDevice)
+		assert.Error(t, err, "CtlByNameAndDevice should return an error for a valid name but invalid device number")
+	}
+}
+
+func testMixerCtlTypeString(t *testing.T, m *alsa.Mixer) {
+	if m.NumCtls() == 0 {
+		t.Skip("Skipping control type string test: no controls found.")
+
+		return
+	}
+
+	typeMap := map[alsa.MixerCtlType]string{
+		alsa.MIXER_CTL_TYPE_BOOL:   "BOOL",
+		alsa.MIXER_CTL_TYPE_INT:    "INT",
+		alsa.MIXER_CTL_TYPE_ENUM:   "ENUM",
+		alsa.MIXER_CTL_TYPE_BYTE:   "BYTE",
+		alsa.MIXER_CTL_TYPE_IEC958: "IEC958",
+		alsa.MIXER_CTL_TYPE_INT64:  "INT64",
+	}
+
+	for _, ctl := range m.Ctls {
+		ctlType := ctl.Type()
+		typeStr := ctl.TypeString()
+
+		expectedStr, ok := typeMap[ctlType]
+		if ok {
+			assert.Equal(t, expectedStr, typeStr, "TypeString() for control '%s' of type %v mismatch", ctl.Name(), ctlType)
+		} else {
+			assert.Equal(t, "UNKNOWN", typeStr, "TypeString() for control '%s' with unknown type %v should be UNKNOWN", ctl.Name(), ctlType)
+		}
 	}
 }
