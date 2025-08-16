@@ -40,7 +40,12 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] <output-wav-file>\n", os.Args[0])
 		fmt.Fprintln(os.Stderr, "\nOptions:")
-		flag.PrintDefaults()
+		for _, name := range []string{"card", "device", "period-size", "period-count", "channels", "rate", "format", "duration"} {
+			f := flag.Lookup(name)
+			if f != nil {
+				fmt.Fprintf(os.Stderr, "  --%s\n    \t%v (default %q)\n", f.Name, f.Usage, f.DefValue)
+			}
+		}
 	}
 
 	flag.Parse()

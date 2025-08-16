@@ -26,7 +26,12 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [control] [value...]\n", os.Args[0])
 		fmt.Fprintln(os.Stderr, "\nOptions:")
-		flag.PrintDefaults()
+		for _, name := range []string{"card", "device", "list", "no-update"} {
+			f := flag.Lookup(name)
+			if f != nil {
+				fmt.Fprintf(os.Stderr, "  --%s\n    \t%v (default %q)\n", f.Name, f.Usage, f.DefValue)
+			}
+		}
 		fmt.Fprintln(os.Stderr, "\nTo set a control, provide the control name or ID and the desired value(s).")
 		fmt.Fprintln(os.Stderr, "If no control is specified, all controls and their values are listed.")
 	}
