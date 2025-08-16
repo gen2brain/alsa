@@ -33,7 +33,7 @@ type sndPcmStatus struct {
 	Tstamp         kernelTimespec
 	ApplPtr        SndPcmUframesT
 	HwPtr          SndPcmUframesT
-	Delay          sndPcmSframesT
+	Delay          SndPcmSframesT
 	Avail          SndPcmUframesT
 	AvailMax       SndPcmUframesT
 	Overrange      SndPcmUframesT
