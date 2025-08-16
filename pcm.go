@@ -410,6 +410,7 @@ func (p *PCM) xrunRecover(err error) error {
 	p.xruns++
 	if (p.flags & PCM_NORESTART) != 0 {
 		p.state = PCM_STATE_XRUN
+
 		return p.setError(err, "xrun occurred with PCM_NORESTART")
 	}
 
@@ -417,6 +418,7 @@ func (p *PCM) xrunRecover(err error) error {
 	// Stop() calls DROP and sets state to SETUP.
 	if stopErr := p.Stop(); stopErr != nil {
 		p.state = PCM_STATE_XRUN // Can't recover
+
 		return p.setError(stopErr, "xrun recovery failed: could not stop stream")
 	}
 
@@ -424,6 +426,7 @@ func (p *PCM) xrunRecover(err error) error {
 	// Prepare() sets state to PREPARED.
 	if prepErr := p.Prepare(); prepErr != nil {
 		p.state = PCM_STATE_XRUN // Can't recover
+
 		return p.setError(prepErr, "xrun recovery failed: could not prepare stream")
 	}
 
@@ -854,6 +857,7 @@ func (p *PCM) startUnconditional() error {
 		if errors.Is(err, syscall.EPIPE) {
 			p.state = PCM_STATE_XRUN
 			p.xruns++
+
 			return p.setError(err, "ioctl START failed with xrun")
 		}
 
@@ -1312,14 +1316,22 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 	}
 
 	if syncErr := p.ioctlSync(SNDRV_PCM_SYNC_PTR_HWSYNC); syncErr != nil {
-		if p.xrunRecover(syncErr) != nil {
-			// If recovery itself fails, that's a fatal error.
-			return nil, 0, 0, p.setError(syncErr, "failed to recover from ioctl sync ptr")
+		// Only attempt recovery for EPIPE (XRUN)
+		if errors.Is(syncErr, syscall.EPIPE) {
+			// Try to recover from the XRUN
+			if recoveryErr := p.xrunRecover(syncErr); recoveryErr != nil {
+				// If recovery itself fails, that's a fatal error.
+				return nil, 0, 0, p.setError(recoveryErr, "failed to recover from xrun after sync")
+			}
+
+			// After successful recovery, return EPIPE to signal that an XRUN happened
+			// and the application should retry the operation.
+			return nil, 0, 0, syscall.EPIPE
 		}
 
-		// Even after successful recovery, return EPIPE to signal to the caller
-		// that an XRUN happened and the state has changed, mirroring tinyalsa.
-		return nil, 0, 0, syscall.EPIPE
+		// For any other error from ioctlSync, it's not a recoverable XRUN,
+		// so we should return the original error.
+		return nil, 0, 0, syncErr
 	}
 
 	p.state = PcmState(p.mmapStatus.State)
