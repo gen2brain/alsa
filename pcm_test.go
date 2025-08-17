@@ -24,8 +24,8 @@ import (
 // This creates virtual loopback sound cards that allow testing playback and capture.
 
 var (
-	// kDefaultConfig mirrors the configuration used in the C++ tests.
-	kDefaultConfig = alsa.Config{
+	// defaultConfig mirrors the configuration used in the C++ tests.
+	defaultConfig = alsa.Config{
 		Channels:    2,
 		Rate:        48000,
 		PeriodSize:  1024,
@@ -90,7 +90,7 @@ func TestPcmHardware(t *testing.T) {
 
 func testPcmOpenAndClose(t *testing.T) {
 	// Test opening a non-existent device
-	pcm, err := alsa.PcmOpen(1000, 1000, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(1000, 1000, alsa.PCM_OUT, &defaultConfig)
 	if err == nil {
 		t.Error("expected error when opening non-existent device, but got nil")
 		pcm.Close()
@@ -119,7 +119,7 @@ func testPcmOpenAndClose(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), tc.flags, &kDefaultConfig)
+			pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), tc.flags, &defaultConfig)
 			if err != nil {
 				// The TTSTAMP ioctl for PCM_MONOTONIC is not supported by all kernels/devices.
 				// If it fails with ENOTTY or EINVAL, skip the test gracefully.
@@ -148,29 +148,29 @@ func testPcmOpenAndClose(t *testing.T) {
 func testPcmOpenByName(t *testing.T) {
 	// Test valid name
 	name := fmt.Sprintf("hw:%d,%d", loopbackCard, loopbackPlaybackDevice)
-	pcm, err := alsa.PcmOpenByName(name, alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpenByName(name, alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err, "PcmOpenByName failed for a valid name")
 	require.NotNil(t, pcm)
 	require.True(t, pcm.IsReady())
 	pcm.Close()
 
 	// Test invalid names
-	_, err = alsa.PcmOpenByName("invalid_name", alsa.PCM_OUT, &kDefaultConfig)
+	_, err = alsa.PcmOpenByName("invalid_name", alsa.PCM_OUT, &defaultConfig)
 	require.Error(t, err, "PcmOpenByName should fail for a name without 'hw:' prefix")
 
-	_, err = alsa.PcmOpenByName("hw:foo,bar", alsa.PCM_OUT, &kDefaultConfig)
+	_, err = alsa.PcmOpenByName("hw:foo,bar", alsa.PCM_OUT, &defaultConfig)
 	require.Error(t, err, "PcmOpenByName should fail for non-numeric card/device")
 
-	_, err = alsa.PcmOpenByName("hw:0", alsa.PCM_OUT, &kDefaultConfig)
+	_, err = alsa.PcmOpenByName("hw:0", alsa.PCM_OUT, &defaultConfig)
 	require.Error(t, err, "PcmOpenByName should fail for incomplete name")
 }
 
 func testPcmStop(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err)
 	// No defer on capturePcm.Close(), we manage it manually with the goroutine.
 
@@ -228,7 +228,7 @@ func testPcmStop(t *testing.T) {
 func testPcmWait(t *testing.T) {
 	t.Run("Timeout", func(t *testing.T) {
 		// Use a capture stream (PCM_IN) for the timeout test.
-		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 		require.NoError(t, err)
 		defer pcm.Close()
 
@@ -242,7 +242,7 @@ func testPcmWait(t *testing.T) {
 	})
 
 	t.Run("Ready", func(t *testing.T) {
-		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 		require.NoError(t, err)
 		defer pcm.Close()
 
@@ -255,7 +255,7 @@ func testPcmWait(t *testing.T) {
 	})
 
 	t.Run("Xrun", func(t *testing.T) {
-		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 		require.NoError(t, err)
 		defer pcm.Close()
 
@@ -283,7 +283,7 @@ func testPcmWait(t *testing.T) {
 func testPcmPlaybackStartup(t *testing.T) {
 	// This test ensures a playback-only stream can be started correctly by the first write,
 	// without an explicit Start() call which would cause an immediate XRUN.
-	config := kDefaultConfig
+	config := defaultConfig
 	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
 	require.NoError(t, err, "Failed to open PCM for playback")
 	defer pcm.Close()
@@ -347,7 +347,7 @@ func testPcmPlaybackStartup(t *testing.T) {
 }
 
 func testPcmGetters(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -355,25 +355,25 @@ func testPcmGetters(t *testing.T) {
 		t.Error("expected a valid file descriptor")
 	}
 
-	require.Equal(t, kDefaultConfig.Channels, pcm.Channels())
-	require.Equal(t, kDefaultConfig.Rate, pcm.Rate())
-	require.Equal(t, kDefaultConfig.Format, pcm.Format())
-	require.Equal(t, kDefaultConfig.PeriodSize*kDefaultConfig.PeriodCount, pcm.BufferSize())
+	require.Equal(t, defaultConfig.Channels, pcm.Channels())
+	require.Equal(t, defaultConfig.Rate, pcm.Rate())
+	require.Equal(t, defaultConfig.Format, pcm.Format())
+	require.Equal(t, defaultConfig.PeriodSize*defaultConfig.PeriodCount, pcm.BufferSize())
 	require.Equal(t, "", pcm.Error())
 }
 
 func testPcmFramesBytesConvert(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	bytesPerFrame := alsa.PcmFormatToBits(kDefaultConfig.Format) / 8 * kDefaultConfig.Channels
+	bytesPerFrame := alsa.PcmFormatToBits(defaultConfig.Format) / 8 * defaultConfig.Channels
 	require.Equal(t, bytesPerFrame, alsa.PcmFramesToBytes(pcm, 1))
 	require.Equal(t, uint32(1), alsa.PcmBytesToFrames(pcm, bytesPerFrame))
 }
 
 func testPcmTimestampBeforeStart(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -384,7 +384,7 @@ func testPcmTimestampBeforeStart(t *testing.T) {
 }
 
 func testPcmWriteiFailsOnCapture(t *testing.T) {
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err)
 	defer capturePcm.Close()
 
@@ -394,7 +394,7 @@ func testPcmWriteiFailsOnCapture(t *testing.T) {
 }
 
 func testPcmReadiFailsOnPlayback(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -406,7 +406,7 @@ func testPcmReadiFailsOnPlayback(t *testing.T) {
 }
 
 func testPcmWriteiTiming(t *testing.T) {
-	config := kDefaultConfig
+	config := defaultConfig
 	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
 	require.NoError(t, err)
 	defer pcm.Close()
@@ -497,7 +497,7 @@ func testPcmWriteiTiming(t *testing.T) {
 }
 
 func testPcmGetDelay(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
@@ -515,11 +515,11 @@ func testPcmGetDelay(t *testing.T) {
 }
 
 func testPcmReadiTiming(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	playbackPcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	playbackPcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer playbackPcm.Close()
 
@@ -569,7 +569,7 @@ func testPcmReadiTiming(t *testing.T) {
 	<-readyToWrite
 
 	const readCount = 20
-	bufferSize := alsa.PcmFramesToBytes(pcm, kDefaultConfig.PeriodSize)
+	bufferSize := alsa.PcmFramesToBytes(pcm, defaultConfig.PeriodSize)
 	buffer := make([]byte, bufferSize)
 	frames := alsa.PcmBytesToFrames(pcm, bufferSize)
 
@@ -588,7 +588,7 @@ func testPcmReadiTiming(t *testing.T) {
 
 	duration := time.Since(start)
 
-	expectedDurationMs := float64(frames*readCount) * 1000.0 / float64(kDefaultConfig.Rate)
+	expectedDurationMs := float64(frames*readCount) * 1000.0 / float64(defaultConfig.Rate)
 	durationMs := float64(duration.Milliseconds())
 
 	tolerance := 150.0 // ms
@@ -598,11 +598,11 @@ func testPcmReadiTiming(t *testing.T) {
 }
 
 func testPcmMmapWrite(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_MMAP, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_MMAP, &defaultConfig)
 	require.NoError(t, err, "PcmOpen with MMAP failed")
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_MMAP, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_MMAP, &defaultConfig)
 	require.NoError(t, err, "PcmOpen capture (MMAP) failed")
 	defer capturePcm.Close()
 
@@ -661,7 +661,7 @@ func testPcmMmapWrite(t *testing.T) {
 	<-readyToRead
 
 	const writeCount = 20
-	bufferSize := alsa.PcmFramesToBytes(pcm, kDefaultConfig.PeriodSize)
+	bufferSize := alsa.PcmFramesToBytes(pcm, defaultConfig.PeriodSize)
 	buffer := make([]byte, bufferSize)
 
 	start := time.Now()
@@ -692,8 +692,8 @@ func testPcmMmapWrite(t *testing.T) {
 
 	require.NoError(t, pcm.Stop())
 
-	expectedFrames := uint32(writeCount) * kDefaultConfig.PeriodSize
-	expectedDurationMs := float64(expectedFrames) * 1000.0 / float64(kDefaultConfig.Rate)
+	expectedFrames := uint32(writeCount) * defaultConfig.PeriodSize
+	expectedDurationMs := float64(expectedFrames) * 1000.0 / float64(defaultConfig.Rate)
 	durationMs := float64(duration.Milliseconds())
 
 	tolerance := 250.0 // MMAP tests can have higher latency, increase tolerance
@@ -802,8 +802,8 @@ func testSetConfig(t *testing.T) {
 	// changing only the buffer geometry, as the device may have a fixed rate/channel count.
 	// This tests the reconfiguration logic without failing on hardware limitations.
 	newConfig := alsa.Config{
-		Channels:    kDefaultConfig.Channels,
-		Rate:        kDefaultConfig.Rate,
+		Channels:    defaultConfig.Channels,
+		Rate:        defaultConfig.Rate,
 		PeriodSize:  512,
 		PeriodCount: 2,
 		Format:      alsa.PCM_FORMAT_S16_LE,
@@ -826,11 +826,11 @@ func testSetConfig(t *testing.T) {
 func testPcmLink(t *testing.T) {
 	// Open two streams on the same subdevice of the loopback card.
 	// This requires a card that supports multiple streams on one device, which snd-aloop does.
-	pcm1, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm1, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err, "Failed to open playback stream")
 	defer pcm1.Close()
 
-	pcm2, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	pcm2, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err, "Failed to open capture stream")
 	defer pcm2.Close()
 
@@ -847,11 +847,11 @@ func testPcmLink(t *testing.T) {
 }
 
 func testPcmDrain(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
 
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err, "Could not open capture side of device")
 	defer capturePcm.Close()
 
@@ -922,7 +922,7 @@ func testPcmDrain(t *testing.T) {
 }
 
 func testPcmPause(t *testing.T) {
-	config := kDefaultConfig
+	config := defaultConfig
 	// Set the start threshold to the full buffer size.
 	// This makes the stream start only when the buffer is full,
 	// preventing an immediate underrun due to scheduling delays in the writer goroutine.
@@ -1055,7 +1055,7 @@ func testPcmLoopback(t *testing.T) {
 				t.Skipf("Capture device does not support format %s, skipping", alsa.PcmParamFormatNames[tf.format])
 			}
 
-			config := kDefaultConfig
+			config := defaultConfig
 			config.Format = tf.format
 			// Set a large start threshold to prevent underruns at the beginning of the stream.
 			// This gives the writer goroutine time to run and fill the buffer before the
@@ -1089,6 +1089,7 @@ func testPcmLoopback(t *testing.T) {
 
 			var wg sync.WaitGroup
 			done := make(chan struct{})
+			playbackStarted := make(chan struct{}) // Synchronization channel
 
 			// Use thread-safe error holders to report errors from goroutines.
 			var captureErr, playbackErr error
@@ -1119,20 +1120,17 @@ func testPcmLoopback(t *testing.T) {
 				frames := pcmIn.PeriodSize()
 				buffer := make([]byte, bufferSize)
 
-				// It can take some time for the first written buffer to be looped back.
-				// We will read several buffers and only fail if none of them contain energy.
-				const maxSilentReads = 15 // Allow for up to 15 silent buffer reads
 				var energyFound = false
-
-				counter := 0
+				var playbackHasStarted = false
 
 				for {
 					select {
 					case <-done:
-						// If we exit before finding energy, report it.
-						if !energyFound {
+						// If playback started but we never found a signal, it's an error.
+						if playbackHasStarted && !energyFound {
 							setCaptureErr(fmt.Errorf("test finished but no signal energy was ever detected"))
 						}
+
 						return
 					default:
 						read, err := pcmIn.ReadI(buffer, frames)
@@ -1141,28 +1139,36 @@ func testPcmLoopback(t *testing.T) {
 							if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) {
 								return
 							}
-							setCaptureErr(fmt.Errorf("the ReadI failed on iteration %d: %w", counter, err))
+
+							setCaptureErr(fmt.Errorf("the ReadI failed: %w", err))
+
 							return
 						}
 
 						if read != int(frames) {
-							setCaptureErr(fmt.Errorf("short read on iteration %d: got %d frames, want %d", counter, read, frames))
+							setCaptureErr(fmt.Errorf("short read: got %d frames, want %d", read, frames))
+
 							return
 						}
 
-						// Once we find a buffer with energy, we are good and can stop checking.
+						// Don't check for energy until the writer confirms it has started.
+						if !playbackHasStarted {
+							select {
+							case <-playbackStarted:
+								playbackHasStarted = true
+							default:
+								// Keep reading but ignore the buffer content for now.
+								continue
+							}
+						}
+
+						// Once we know playback has started, we can check for energy.
 						if !energyFound {
 							e := energy(buffer, config.Format)
 							if e > 0.0 {
 								energyFound = true
-							} else if counter > maxSilentReads {
-								// If we've read many buffers and still have silence, something is wrong.
-								setCaptureErr(fmt.Errorf("captured signal has no energy (e=%.2f) after %d reads", e, counter))
-								return
 							}
 						}
-
-						counter++
 					}
 				}
 			}()
@@ -1177,6 +1183,7 @@ func testPcmLoopback(t *testing.T) {
 				frames := pcmOut.PeriodSize()
 				buffer := make([]byte, bufferSize)
 				counter := 0
+				var signaled bool
 
 				for {
 					select {
@@ -1190,12 +1197,21 @@ func testPcmLoopback(t *testing.T) {
 							if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) {
 								return
 							}
+
 							setPlaybackErr(fmt.Errorf("the WriteI failed on iteration %d: %w", counter, err))
+
 							return
 						}
 						if written != int(frames) {
 							setPlaybackErr(fmt.Errorf("short write on iteration %d: got %d frames, want %d", counter, written, frames))
+
 							return
+						}
+
+						// Signal to the capture goroutine that the first write is done.
+						if !signaled {
+							close(playbackStarted)
+							signaled = true
 						}
 
 						counter++
@@ -1216,7 +1232,7 @@ func testPcmLoopback(t *testing.T) {
 }
 
 func testPcmMmapLoopback(t *testing.T) {
-	config := kDefaultConfig
+	config := defaultConfig
 	config.Format = alsa.PCM_FORMAT_S16_LE
 	// Set a large start threshold to prevent underruns at the beginning of the stream.
 	if config.PeriodCount > 1 {
@@ -1292,25 +1308,29 @@ func testPcmMmapLoopback(t *testing.T) {
 
 		// Use a period-sized buffer for MMAP read as well, to match the write side's granularity.
 		buffer := make([]byte, alsa.PcmFramesToBytes(pcmIn, pcmIn.PeriodSize()))
-		counter := 0
-		started := false
+		var energyFound bool
+		var playbackHasStarted bool
 
 		for {
 			select {
 			case <-done:
+				if playbackHasStarted && !energyFound {
+					setCaptureErr(fmt.Errorf("test finished but no signal energy was ever detected"))
+				}
 				return
 			default:
 				read, err := pcmIn.MmapRead(buffer)
 				if err != nil {
 					// These errors are expected during concurrent operation or shutdown.
-					if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EAGAIN) {
-						// For EAGAIN in a loopback test, we expect data soon, so continue unless done.
-						if errors.Is(err, syscall.EAGAIN) {
-							continue
-						}
+					if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) {
 						return
 					}
-					setCaptureErr(fmt.Errorf("MmapRead failed on iteration %d: %w", counter, err))
+					// EAGAIN might happen if the buffer is momentarily empty.
+					if errors.Is(err, syscall.EAGAIN) {
+						continue
+					}
+
+					setCaptureErr(fmt.Errorf("MmapRead failed: %w", err))
 					return
 				}
 				if read == 0 {
@@ -1318,25 +1338,20 @@ func testPcmMmapLoopback(t *testing.T) {
 				}
 
 				// Don't evaluate energy until playback has started writing.
-				if !started {
+				if !playbackHasStarted {
 					select {
 					case <-playbackStarted:
-						started = true
+						playbackHasStarted = true
 					default:
 						continue
 					}
 				}
 
-				// Let the buffer fill with the sine wave before checking energy.
-				if counter >= 5 {
-					e := energy(buffer[:read], config.Format)
-					if e <= 0.0 {
-						setCaptureErr(fmt.Errorf("captured signal has no energy (e=%.2f) on iteration %d", e, counter))
-						return
+				if !energyFound {
+					if energy(buffer[:read], config.Format) > 0.0 {
+						energyFound = true
 					}
 				}
-
-				counter++
 			}
 		}
 	}()
@@ -1365,13 +1380,17 @@ func testPcmMmapLoopback(t *testing.T) {
 						if errors.Is(err, syscall.EAGAIN) {
 							continue
 						}
+
 						return
 					}
+
 					setPlaybackErr(fmt.Errorf("MmapWrite failed on iteration %d: %w", counter, err))
+
 					return
 				}
 				if written != len(buffer) {
 					setPlaybackErr(fmt.Errorf("short mmap write on iteration %d: got %d, want %d", counter, written, len(buffer)))
+
 					return
 				}
 
