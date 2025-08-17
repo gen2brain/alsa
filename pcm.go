@@ -537,11 +537,11 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 
 // WriteN writes non-interleaved audio data to a playback PCM device.
 // This function is for non-MMAP, non-interleaved access. It is less common than
-// interleaved I/O. The `data` slice should contain one slice per channel (e.g., `[][]byte`),
-// each containing 'frames' worth of sample data. It uses the `SNDRV_PCM_IOCTL_WRITEN_FRAMES` ioctl.
+// interleaved I/O. The `data` argument must be a slice of slices (e.g., `[][]int16`),
+// with each inner slice representing a channel and containing 'frames' worth of sample data.
 // Like WriteI, it handles underruns by preparing and retrying the write.
 // Returns the number of frames actually written.
-func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
+func (p *PCM) WriteN(data any, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) != 0 {
 		return 0, p.setError(nil, "cannot write to a capture device")
 	}
@@ -550,17 +550,13 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 		return 0, p.setError(nil, "WriteN is not for mmap devices")
 	}
 
-	if uint32(len(data)) != p.config.Channels {
-		return 0, p.setError(nil, "incorrect number of channels in data: expected %d, got %d", p.config.Channels, len(data))
+	pointers, err := checkSliceOfSlices(p, data, frames)
+	if err != nil {
+		return 0, p.setError(err, "invalid data type for WriteN")
 	}
 
-	bytesPerFramePerChannel := PcmFormatToBits(p.config.Format) / 8
-	requiredBytes := frames * bytesPerFramePerChannel
-
-	for i, channelData := range data {
-		if uint32(len(channelData)) < requiredBytes {
-			return 0, p.setError(nil, "channel %d buffer too small: needs %d, got %d", i, requiredBytes, len(channelData))
-		}
+	if frames == 0 {
+		return 0, nil
 	}
 
 	defer runtime.KeepAlive(data)
@@ -572,15 +568,9 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 		}
 	}
 
-	pointers := make([]uintptr, p.config.Channels)
-	for i := range data {
-		if len(data[i]) > 0 {
-			pointers[i] = uintptr(unsafe.Pointer(&data[i][0]))
-		}
-	}
-
 	defer runtime.KeepAlive(pointers)
 
+	bytesPerFramePerChannel := p.FrameSize() / p.config.Channels
 	framesWritten := uint32(0)
 	for framesWritten < frames {
 		remainingFrames := frames - framesWritten
@@ -731,11 +721,11 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 // ReadN reads non-interleaved audio data from a capture PCM device.
 // This function is for non-MMAP, non-interleaved access. The provided `buffers`
-// slice must contain one slice per channel (e.g., `[][]byte`), each large enough to
-// hold 'frames' of audio data. It uses the `SNDRV_PCM_IOCTL_READN_FRAMES` ioctl.
+// argument must be a slice of slices (e.g., `[][]int16`), with each inner slice
+// being large enough to hold 'frames' of audio data for one channel.
 // Like ReadI, it handles overruns by preparing and retrying the read.
 // Returns the number of frames actually read.
-func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
+func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) == 0 {
 		return 0, p.setError(nil, "cannot read from a playback device")
 	}
@@ -744,17 +734,13 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 		return 0, p.setError(nil, "ReadN is not for mmap devices")
 	}
 
-	if uint32(len(buffers)) != p.config.Channels {
-		return 0, p.setError(nil, "incorrect number of channels in buffers: expected %d, got %d", p.config.Channels, len(buffers))
+	pointers, err := checkSliceOfSlices(p, buffers, frames)
+	if err != nil {
+		return 0, p.setError(err, "invalid buffer type for ReadN")
 	}
 
-	bytesPerFramePerChannel := PcmFormatToBits(p.config.Format) / 8
-	requiredBytes := frames * bytesPerFramePerChannel
-
-	for i, channelBuffer := range buffers {
-		if uint32(len(channelBuffer)) < requiredBytes {
-			return 0, p.setError(nil, "channel %d buffer too small: needs %d, got %d", i, requiredBytes, len(channelBuffer))
-		}
+	if frames == 0 {
+		return 0, nil
 	}
 
 	defer runtime.KeepAlive(buffers)
@@ -766,15 +752,9 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 		}
 	}
 
-	pointers := make([]uintptr, p.config.Channels)
-	for i := range buffers {
-		if len(buffers[i]) > 0 {
-			pointers[i] = uintptr(unsafe.Pointer(&buffers[i][0]))
-		}
-	}
-
 	defer runtime.KeepAlive(pointers)
 
+	bytesPerFramePerChannel := p.FrameSize() / p.config.Channels
 	framesRead := uint32(0)
 	for framesRead < frames {
 		remainingFrames := frames - framesRead
@@ -1863,6 +1843,73 @@ func checkSliceAndGetData(data any) (ptr unsafe.Pointer, byteLen uint32, err err
 	}
 
 	return ptr, byteLen, nil
+}
+
+// checkSliceOfSlices validates that the input is a slice of slices of a supported numeric type.
+// It checks channel count, type consistency, and buffer length for all inner slices.
+// It returns a slice of pointers to the data of each inner slice.
+func checkSliceOfSlices(p *PCM, data any, frames uint32) ([]uintptr, error) {
+	if data == nil {
+		return nil, errors.New("data cannot be nil")
+	}
+
+	rv := reflect.ValueOf(data)
+	if rv.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("expected a slice of slices, got %T", data)
+	}
+
+	if uint32(rv.Len()) != p.config.Channels {
+		return nil, fmt.Errorf("incorrect number of channels in data: expected %d, got %d", p.config.Channels, rv.Len())
+	}
+
+	if rv.Len() == 0 {
+		return nil, nil // No channels, nothing to do.
+	}
+
+	// Determine expected element type and size from the first channel
+	firstInnerSlice := rv.Index(0)
+	if firstInnerSlice.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("expected a slice of slices, but first element is %T", firstInnerSlice.Interface())
+	}
+	elemType := firstInnerSlice.Type().Elem()
+
+	// Validate element type is a supported numeric type
+	switch elemType.Kind() {
+	case reflect.Int8, reflect.Uint8,
+		reflect.Int16, reflect.Uint16,
+		reflect.Int32, reflect.Uint32,
+		reflect.Float32, reflect.Float64:
+		// Valid types
+	default:
+		return nil, fmt.Errorf("unsupported slice element type: %s", elemType.Kind())
+	}
+
+	// The number of bytes per frame for a single channel's data
+	bytesPerFramePerChannel := p.FrameSize() / p.config.Channels
+	requiredBytes := frames * bytesPerFramePerChannel
+	pointers := make([]uintptr, p.config.Channels)
+
+	for i := 0; i < rv.Len(); i++ {
+		innerSlice := rv.Index(i)
+
+		// Check that all inner elements are slices of the same type
+		if innerSlice.Kind() != reflect.Slice || innerSlice.Type().Elem() != elemType {
+			return nil, fmt.Errorf("channel %d is not a slice of the expected type", i)
+		}
+
+		// Check if the buffer for this channel is large enough
+		byteLen := uint32(innerSlice.Len()) * uint32(elemType.Size())
+		if byteLen < requiredBytes {
+			return nil, fmt.Errorf("channel %d buffer too small: needs %d bytes, got %d", i, requiredBytes, byteLen)
+		}
+
+		// Get the pointer to the slice data
+		if innerSlice.Len() > 0 {
+			pointers[i] = innerSlice.Index(0).Addr().Pointer()
+		}
+	}
+
+	return pointers, nil
 }
 
 // PcmFormatToBits returns the number of bits per sample for a given format.

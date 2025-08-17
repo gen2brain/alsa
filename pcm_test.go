@@ -409,44 +409,50 @@ func testPcmReadiFailsOnPlayback(t *testing.T) {
 }
 
 func testPcmWriteNFailsOnCapture(t *testing.T) {
-	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_NONINTERLEAVED, &defaultConfig)
+	config := defaultConfig
+	config.Format = alsa.PCM_FORMAT_S16_LE // Use a specific format for typed slice
+
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_NONINTERLEAVED, &config)
 	if err != nil {
 		if errors.Is(err, syscall.EINVAL) {
 			t.Skipf("Device does not support non-interleaved access, skipping test: %v", err)
 		}
-
 		require.NoError(t, err)
 	}
 	defer capturePcm.Close()
 
-	buffers := make([][]byte, defaultConfig.Channels)
-	bytesPerChannel := alsa.PcmFramesToBytes(capturePcm, 128) / defaultConfig.Channels
+	// Use a typed slice (e.g., [][]int16) matching the format
+	buffers := make([][]int16, config.Channels)
+	samplesPerChannel := 128
 	for i := range buffers {
-		buffers[i] = make([]byte, bytesPerChannel)
+		buffers[i] = make([]int16, samplesPerChannel)
 	}
 
-	_, err = capturePcm.WriteN(buffers, 128)
+	_, err = capturePcm.WriteN(buffers, uint32(samplesPerChannel))
 	require.Error(t, err, "expected error when calling WriteN on a capture stream")
 }
 
 func testPcmReadNFailsOnPlayback(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_NONINTERLEAVED, &defaultConfig)
+	config := defaultConfig
+	config.Format = alsa.PCM_FORMAT_S16_LE // Use a specific format for typed slice
+
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_NONINTERLEAVED, &config)
 	if err != nil {
 		if errors.Is(err, syscall.EINVAL) {
 			t.Skipf("Device does not support non-interleaved access, skipping test: %v", err)
 		}
-
 		require.NoError(t, err)
 	}
 	defer pcm.Close()
 
-	buffers := make([][]byte, defaultConfig.Channels)
-	bytesPerChannel := alsa.PcmFramesToBytes(pcm, 128) / defaultConfig.Channels
+	// Use a typed slice (e.g., [][]int16) matching the format
+	buffers := make([][]int16, config.Channels)
+	samplesPerChannel := 128
 	for i := range buffers {
-		buffers[i] = make([]byte, bytesPerChannel)
+		buffers[i] = make([]int16, samplesPerChannel)
 	}
 
-	_, err = pcm.ReadN(buffers, 128)
+	_, err = pcm.ReadN(buffers, uint32(samplesPerChannel))
 	require.Error(t, err, "expected error when calling ReadN on a playback stream")
 	require.Contains(t, err.Error(), "cannot read from a playback device")
 }
@@ -467,6 +473,8 @@ func testPcmLoopbackNonInterleaved(t *testing.T) {
 
 	// 2. Setup PCMs with non-interleaved flag.
 	config := defaultConfig
+	// The test uses S16_LE format, which is important for the typed slices.
+	config.Format = alsa.PCM_FORMAT_S16_LE
 	// Set a large start threshold to prevent underruns at the beginning of the stream.
 	if config.PeriodCount > 1 {
 		config.StartThreshold = config.PeriodSize * (config.PeriodCount - 1)
@@ -523,10 +531,9 @@ func testPcmLoopbackNonInterleaved(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		framesPerPeriod := pcmIn.PeriodSize()
-		bytesPerChannel := alsa.PcmFramesToBytes(pcmIn, 1) / config.Channels
-		readBuffer := make([][]byte, config.Channels)
+		readBuffer := make([][]int16, config.Channels)
 		for c := range readBuffer {
-			readBuffer[c] = make([]byte, bytesPerChannel*framesPerPeriod)
+			readBuffer[c] = make([]int16, framesPerPeriod)
 		}
 
 		for {
@@ -541,12 +548,9 @@ func testPcmLoopbackNonInterleaved(t *testing.T) {
 					if errors.Is(err, syscall.EBADF) {
 						return
 					}
-
 					setReadErr(fmt.Errorf("ReadN failed inside loop: %w", err))
-
 					return
 				}
-
 				if read > 0 && uint32(read) != framesPerPeriod {
 					setReadErr(fmt.Errorf("short read from ReadN: got %d, want %d", read, framesPerPeriod))
 				}
@@ -558,14 +562,15 @@ func testPcmLoopbackNonInterleaved(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		framesPerPeriod := pcmOut.PeriodSize()
-		bytesPerFrame := alsa.PcmFramesToBytes(pcmOut, 1)
-		bytesPerChannel := bytesPerFrame / config.Channels
 
 		generator := newSineToneGenerator(config, 440, 0)
-		interleavedSource := make([]byte, bytesPerFrame*framesPerPeriod)
-		nonInterleavedSource := make([][]byte, config.Channels)
+		interleavedSource := make([]byte, alsa.PcmFramesToBytes(pcmOut, framesPerPeriod))
+		// Cast the byte slice to an int16 slice for easier manipulation
+		interleavedSourceS16 := unsafe.Slice((*int16)(unsafe.Pointer(&interleavedSource[0])), len(interleavedSource)/2)
+
+		nonInterleavedSource := make([][]int16, config.Channels)
 		for c := range nonInterleavedSource {
-			nonInterleavedSource[c] = make([]byte, bytesPerChannel*framesPerPeriod)
+			nonInterleavedSource[c] = make([]int16, framesPerPeriod)
 		}
 
 		for {
@@ -577,9 +582,9 @@ func testPcmLoopbackNonInterleaved(t *testing.T) {
 				generator.Read(interleavedSource)
 				for f := uint32(0); f < framesPerPeriod; f++ {
 					for c := uint32(0); c < config.Channels; c++ {
-						srcOffset := f*bytesPerFrame + c*bytesPerChannel
-						dstOffset := f * bytesPerChannel
-						copy(nonInterleavedSource[c][dstOffset:dstOffset+bytesPerChannel], interleavedSource[srcOffset:srcOffset+bytesPerChannel])
+						srcIndex := f*config.Channels + c
+						dstIndex := f
+						nonInterleavedSource[c][dstIndex] = interleavedSourceS16[srcIndex]
 					}
 				}
 
@@ -589,12 +594,9 @@ func testPcmLoopbackNonInterleaved(t *testing.T) {
 					if errors.Is(err, syscall.EBADF) {
 						return
 					}
-
 					setWriteErr(fmt.Errorf("WriteN failed inside loop: %w", err))
-
 					return
 				}
-
 				if uint32(written) != framesPerPeriod {
 					setWriteErr(fmt.Errorf("short write from WriteN: got %d, want %d", written, framesPerPeriod))
 				}
