@@ -70,7 +70,8 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmPlaybackStartup", testPcmPlaybackStartup)
 	t.Run("PcmGetters", testPcmGetters)
 	t.Run("PcmFramesBytesConvert", testPcmFramesBytesConvert)
-	t.Run("PcmTimestampBeforeStart", testPcmTimestampBeforeStart)
+	t.Run("PcmTimestampFailsOnNonMmap", testPcmTimestampFailsOnNonMmap)
+	t.Run("PcmHWPtrFailsOnNonMmap", testPcmHWPtrFailsOnNonMmap)
 	t.Run("PcmWriteiFailsOnCapture", testPcmWriteiFailsOnCapture)
 	t.Run("PcmReadiFailsOnPlayback", testPcmReadiFailsOnPlayback)
 	t.Run("PcmWriteiTiming", testPcmWriteiTiming)
@@ -79,6 +80,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmGetDelay", testPcmGetDelay)
 	t.Run("PcmReadiTiming", testPcmReadiTiming)
 	t.Run("PcmMmapWrite", testPcmMmapWrite)
+	t.Run("PcmState", testPcmState)
 	t.Run("PcmStop", testPcmStop)
 	t.Run("PcmWait", testPcmWait)
 	t.Run("PcmParams", testPcmParams)
@@ -168,6 +170,59 @@ func testPcmOpenByName(t *testing.T) {
 	require.Error(t, err, "PcmOpenByName should fail for incomplete name")
 }
 
+func testPcmState(t *testing.T) {
+	t.Run("KernelStateNonMmap", func(t *testing.T) {
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		// Initial cached state is SETUP. KernelState should report this (or OPEN, depending on the driver).
+		// The function gracefully falls back to the cached state if the underlying ioctl isn't supported.
+		initialState := pcm.KernelState()
+		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_OPEN, alsa.PCM_STATE_SETUP}, initialState)
+
+		require.NoError(t, pcm.Prepare())
+		// After Prepare, cached state is PREPARED. Kernel should report the same.
+		assert.Equal(t, alsa.PCM_STATE_PREPARED, pcm.KernelState(), "KernelState should be PREPARED after prepare")
+
+		// Starting an empty stream is expected to cause an immediate underrun (EPIPE).
+		// We call Start() but don't check the error, as EPIPE is the correct behavior here.
+		_ = pcm.Start()
+
+		// On a playback-only stream with no data, this will immediately underrun.
+		// Give it a moment for the state to be detectable.
+		time.Sleep(50 * time.Millisecond)
+
+		// KernelState should now report XRUN, or PREPARED if the driver auto-stops on underrun (due to stop_threshold).
+		finalState := pcm.KernelState()
+		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_XRUN, alsa.PCM_STATE_PREPARED}, finalState, "KernelState should be XRUN or PREPARED after starting an empty stream")
+	})
+
+	t.Run("KernelStateMmap", func(t *testing.T) {
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_MMAP, &defaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		// For MMAP streams, the status struct is mmapped, so KernelState should be accurate.
+		// After setup, the state in the kernel's mmap region should be SETUP.
+		initialState := pcm.KernelState()
+		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_OPEN, alsa.PCM_STATE_SETUP}, initialState)
+
+		require.NoError(t, pcm.Prepare())
+		assert.Equal(t, alsa.PCM_STATE_PREPARED, pcm.KernelState(), "KernelState should be PREPARED after prepare")
+
+		// Starting an empty stream is expected to cause an immediate underrun (EPIPE).
+		// We call Start() but don't check the error, as EPIPE is the correct behavior here.
+		_ = pcm.Start()
+
+		time.Sleep(50 * time.Millisecond) // Allow time for underrun
+
+		// KernelState should now report XRUN, or PREPARED if the driver auto-stops on underrun.
+		finalState := pcm.KernelState()
+		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_XRUN, alsa.PCM_STATE_PREPARED}, finalState, "KernelState should be XRUN or PREPARED after starting an empty mmap stream")
+	})
+}
+
 func testPcmStop(t *testing.T) {
 	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
@@ -199,7 +254,7 @@ func testPcmStop(t *testing.T) {
 				return
 			default:
 				// This read will block until data is written or the stream is closed.
-				_, err := capturePcm.ReadI(buffer, capturePcm.PeriodSize())
+				err := capturePcm.Read(buffer)
 				if err != nil {
 					// Expect an error when the stream is closed.
 					return
@@ -210,7 +265,7 @@ func testPcmStop(t *testing.T) {
 
 	// Write some data to start the stream
 	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
-	_, err = pcm.WriteI(buffer, pcm.PeriodSize())
+	err = pcm.Write(buffer)
 	require.NoError(t, err)
 
 	state, _ := pcm.State()
@@ -280,6 +335,8 @@ func testPcmWait(t *testing.T) {
 		assert.False(t, ready, "Ready should be false when an XRUN has occurred")
 		require.Error(t, err, "Wait should return an error for an XRUN")
 		assert.True(t, errors.Is(err, syscall.EPIPE), "Wait should return EPIPE for an XRUN, but got: %v", err)
+		// The checkState function called by Wait should have detected the XRUN and incremented the counter.
+		assert.GreaterOrEqual(t, pcm.Xruns(), 1, "Xruns counter should increment after an underrun")
 	})
 }
 
@@ -358,11 +415,22 @@ func testPcmGetters(t *testing.T) {
 		t.Error("expected a valid file descriptor")
 	}
 
+	require.Equal(t, alsa.PCM_OUT, pcm.Flags())
+	require.Equal(t, defaultConfig.PeriodCount, pcm.PeriodCount())
+	// The loopback playback device is opened, which is index 0. Its subdevice number should also be 0.
+	require.Equal(t, uint32(loopbackPlaybackDevice), pcm.Subdevice())
+	require.Equal(t, 0, pcm.Xruns(), "Xruns should be 0 on a newly opened stream")
+
 	require.Equal(t, defaultConfig.Channels, pcm.Channels())
 	require.Equal(t, defaultConfig.Rate, pcm.Rate())
 	require.Equal(t, defaultConfig.Format, pcm.Format())
 	require.Equal(t, defaultConfig.PeriodSize*defaultConfig.PeriodCount, pcm.BufferSize())
 	require.Equal(t, "", pcm.Error())
+
+	// Test PeriodTime calculation
+	expectedNs := (1e9 * float64(defaultConfig.PeriodSize)) / float64(defaultConfig.Rate)
+	expectedDuration := time.Duration(expectedNs)
+	require.Equal(t, expectedDuration, pcm.PeriodTime(), "PeriodTime should be calculated correctly")
 }
 
 func testPcmFramesBytesConvert(t *testing.T) {
@@ -375,7 +443,7 @@ func testPcmFramesBytesConvert(t *testing.T) {
 	require.Equal(t, uint32(1), alsa.PcmBytesToFrames(pcm, bytesPerFrame))
 }
 
-func testPcmTimestampBeforeStart(t *testing.T) {
+func testPcmTimestampFailsOnNonMmap(t *testing.T) {
 	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
 	require.NoError(t, err)
 	defer pcm.Close()
@@ -383,6 +451,17 @@ func testPcmTimestampBeforeStart(t *testing.T) {
 	// This test is expected to fail on non-mmap streams.
 	_, _, err = pcm.Timestamp()
 	require.Error(t, err, "Timestamp() should fail on a non-MMAP stream")
+	require.Contains(t, err.Error(), "only available for MMAP streams")
+}
+
+func testPcmHWPtrFailsOnNonMmap(t *testing.T) {
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
+	require.NoError(t, err)
+	defer pcm.Close()
+
+	// This should fail as HWPtr is only for MMAP streams.
+	_, _, err = pcm.HWPtr()
+	require.Error(t, err, "HWPtr() should fail on a non-MMAP stream")
 	require.Contains(t, err.Error(), "only available for MMAP streams")
 }
 
@@ -825,6 +904,20 @@ func testPcmMmapWrite(t *testing.T) {
 	require.NoError(t, pcm.Prepare(), "playback stream prepare failed")
 	require.NoError(t, capturePcm.Prepare(), "capture stream prepare failed")
 
+	// Test AvailMax on the prepared playback stream. Available space should be the full buffer,
+	// so the "max" available frames in the buffer (pcm_avail_max) should be 0.
+	availPlayback, err := pcm.AvailMax()
+	if assert.NoError(t, err, "AvailMax failed on prepared playback stream") {
+		assert.Equal(t, 0, availPlayback, "AvailMax should be 0 for a prepared, empty playback stream")
+	}
+
+	// Test AvailMax on the prepared capture stream. No data is available to read,
+	// so the free space (returned by AvailMax for capture) should be the full buffer size.
+	availCapture, errCapture := capturePcm.AvailMax()
+	if assert.NoError(t, errCapture, "AvailMax failed on prepared capture stream") {
+		assert.Equal(t, int(capturePcm.BufferSize()), availCapture, "AvailMax should be buffer size for a prepared, empty capture stream")
+	}
+
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 	readyToRead := make(chan struct{})
@@ -894,6 +987,20 @@ func testPcmMmapWrite(t *testing.T) {
 		if written != len(buffer) {
 			t.Fatalf("MmapWrite wrote %d bytes, want %d", written, len(buffer))
 		}
+
+		// After a successful write, the stream is guaranteed to be running.
+		// Test Timestamp and HWPtr here, but only once to avoid spamming logs/overhead.
+		if i == 1 {
+			availFrames, _, err := pcm.Timestamp()
+			if assert.NoError(t, err, "Timestamp() should succeed on a running MMAP stream") {
+				assert.LessOrEqual(t, availFrames, pcm.BufferSize(), "Available frames should not exceed buffer size")
+			}
+
+			hwPtr, _, err := pcm.HWPtr()
+			if assert.NoError(t, err, "HWPtr() should succeed on a running MMAP stream") {
+				assert.Less(t, hwPtr, alsa.SndPcmUframesT(pcm.BufferSize()), "Hardware pointer should be within buffer size")
+			}
+		}
 	}
 
 	duration := time.Since(start)
@@ -923,8 +1030,10 @@ func testPcmParams(t *testing.T) {
 		require.NotNil(t, params, "PcmParamsGetRefined returned nil params for valid device")
 
 		// Test GetMask
-		_, err = params.Mask(alsa.PCM_PARAM_ACCESS)
+		mask, err := params.Mask(alsa.PCM_PARAM_ACCESS)
 		require.NoError(t, err, "Mask(PCM_PARAM_ACCESS) failed")
+		assert.False(t, mask.Test(256), "mask.Test() should return false for bit >= 256")
+
 		_, err = params.Mask(alsa.PCM_PARAM_SAMPLE_BITS) // Invalid param type for Mask
 		require.Error(t, err, "expected error when getting mask for an interval parameter")
 

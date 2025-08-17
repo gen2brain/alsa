@@ -272,6 +272,7 @@ func testControlAccess(t *testing.T, m *alsa.Mixer) {
 func testControlProperties(t *testing.T, m *alsa.Mixer) {
 	if m.NumCtls() == 0 {
 		t.Skip("Skipping control properties tests: no controls found.")
+
 		return
 	}
 
@@ -285,7 +286,7 @@ func testControlProperties(t *testing.T, m *alsa.Mixer) {
 		"UNKNOWN": true,
 	}
 
-	for _, ctl := range m.Ctls {
+	for i, ctl := range m.Ctls {
 		// Test Update
 		err := ctl.Update()
 		assert.NoError(t, err, "ctl.Update() should succeed for ctl '%s'", ctl.Name())
@@ -297,21 +298,15 @@ func testControlProperties(t *testing.T, m *alsa.Mixer) {
 		// Test NumValues
 		assert.NotPanics(t, func() { ctl.NumValues() }, "ctl.NumValues() should not panic")
 
-		// Test enums
-		if ctl.Type() == alsa.MIXER_CTL_TYPE_ENUM {
-			numEnums, err := ctl.NumEnums()
-			assert.NoError(t, err, "ctl.NumEnums() should succeed for enum ctl '%s'", ctl.Name())
-			if numEnums > 0 {
-				for j := uint(0); j < uint(numEnums); j++ {
-					enumStr, err := ctl.EnumString(j)
-					assert.NoError(t, err, "ctl.EnumString() should succeed for enum #%d", j)
-					assert.NotEmpty(t, enumStr, "Enum string should not be empty")
-				}
+		// Test String representation
+		s := ctl.String()
+		assert.NotEmpty(t, s, "String() should not be empty for ctl '%s'", ctl.Name())
+		assert.NotEqual(t, "<nil>", s, "String() should not be '<nil>' for ctl '%s'", ctl.Name())
+		assert.Contains(t, s, fmt.Sprintf("Name          : '%s'", ctl.Name()), "String() output is missing the control name")
 
-				allEnums, err := ctl.AllEnumStrings()
-				assert.NoError(t, err)
-				assert.Equal(t, int(numEnums), len(allEnums))
-			}
+		// Log the first control's string output as an example
+		if i == 0 {
+			t.Logf("Example ctl.String() output for '%s':\n%s", ctl.Name(), s)
 		}
 	}
 }
@@ -322,6 +317,7 @@ func testControlValues(t *testing.T, m *alsa.Mixer) {
 		return
 	}
 
+	var foundInt64Ctl bool
 	for _, ctl := range m.Ctls {
 		if ctl.NumValues() == 0 {
 			continue
@@ -329,6 +325,18 @@ func testControlValues(t *testing.T, m *alsa.Mixer) {
 
 		// Test for out-of-bounds access
 		testOutOfBoundsAccess(t, ctl)
+
+		// Test INT64 functions on non-INT64 controls (expect error)
+		if ctl.Type() != alsa.MIXER_CTL_TYPE_INT64 {
+			_, err := ctl.Value64(0)
+			assert.Error(t, err, "Value64 should fail on non-INT64 ctl '%s'", ctl.Name())
+			err = ctl.SetValue64(0, 0)
+			assert.Error(t, err, "SetValue64 should fail on non-INT64 ctl '%s'", ctl.Name())
+			_, err = ctl.RangeMin64()
+			assert.Error(t, err, "RangeMin64 should fail on non-INT64 ctl '%s'", ctl.Name())
+			_, err = ctl.RangeMax64()
+			assert.Error(t, err, "RangeMax64 should fail on non-INT64 ctl '%s'", ctl.Name())
+		}
 
 		// Test Get/Set Percent for Integer controls
 		if ctl.Type() == alsa.MIXER_CTL_TYPE_INT {
@@ -340,8 +348,63 @@ func testControlValues(t *testing.T, m *alsa.Mixer) {
 			testEnumCtl(t, ctl)
 		}
 
+		// Test Get/Set for INT64 controls
+		if ctl.Type() == alsa.MIXER_CTL_TYPE_INT64 {
+			testInt64Ctl(t, ctl)
+			foundInt64Ctl = true
+		}
+
 		// Test Get/Set Array for all readable/writable types
 		testArrayCtl(t, ctl)
+	}
+
+	if !foundInt64Ctl {
+		t.Log("No INT64 controls found on this device, skipping INT64-specific value tests.")
+	}
+}
+
+func testInt64Ctl(t *testing.T, ctl *alsa.MixerCtl) {
+	minVal, errMin := ctl.RangeMin64()
+	maxVal, errMax := ctl.RangeMax64()
+	if errMin != nil || errMax != nil {
+		t.Logf("Skipping INT64 value test for '%s': cannot get range", ctl.Name())
+
+		return
+	}
+	assert.GreaterOrEqual(t, maxVal, minVal)
+
+	originalVal, err := ctl.Value64(0)
+	if err != nil {
+		t.Logf("Skipping INT64 value test for '%s': cannot read original value", ctl.Name())
+
+		return
+	}
+
+	isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
+	if !isWritable {
+		return
+	}
+
+	defer func() {
+		err := ctl.SetValue64(0, originalVal)
+		if err != nil {
+			t.Logf("Warning: failed to restore original int64 value for control '%s': %v", ctl.Name(), err)
+		}
+	}()
+
+	// Try to set to max
+	err = ctl.SetValue64(0, maxVal)
+	if err == nil {
+		newVal, _ := ctl.Value64(0)
+		// Some controls can be written to, but their values might not actually change.
+		assert.True(t, newVal == originalVal || newVal == maxVal, "Value after setting to max should be original or max")
+	}
+
+	// Try to set to min
+	err = ctl.SetValue64(0, minVal)
+	if err == nil {
+		newVal, _ := ctl.Value64(0)
+		assert.True(t, newVal == originalVal || newVal == minVal, "Value after setting to min should be original or min")
 	}
 }
 
@@ -435,59 +498,120 @@ func testIntegerCtl(t *testing.T, ctl *alsa.MixerCtl) {
 }
 
 func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
+	// 1. Test NumEnums
 	numEnums, err := ctl.NumEnums()
 	if err != nil || numEnums == 0 {
+		// This can happen if a control is misidentified as ENUM.
+		// mixer.go has a workaround for this, but if we still get here, just skip.
+		t.Logf("Skipping enum test for '%s': ctl.NumEnums() failed or returned 0: %v", ctl.Name(), err)
+
 		return
 	}
 
-	// Get current value
-	originalValue, err := ctl.Value(0)
-	if err != nil {
-		return // Cannot read initial value
+	assert.Greater(t, numEnums, uint32(0))
+
+	// 2. Test AllEnumStrings and EnumString
+	allEnums, err := ctl.AllEnumStrings()
+	require.NoError(t, err, "AllEnumStrings() should not fail for ctl '%s'", ctl.Name())
+	require.Equal(t, int(numEnums), len(allEnums), "AllEnumStrings() length should match NumEnums() for ctl '%s'", ctl.Name())
+
+	// Verify each string can be fetched individually and matches the full list
+	for i := 0; i < int(numEnums); i++ {
+		enumStr, err := ctl.EnumString(uint(i))
+		assert.NoError(t, err, "EnumString(%d) should not fail for ctl '%s'", i, ctl.Name())
+		assert.Equal(t, allEnums[i], enumStr, "EnumString(%d) should match value from AllEnumStrings for ctl '%s'", i, ctl.Name())
+		assert.NotEmpty(t, enumStr, "Enum string for ctl '%s' item %d should not be empty", ctl.Name(), i)
 	}
 
+	// Test EnumString with out-of-bounds index
+	_, err = ctl.EnumString(uint(numEnums))
+	assert.Error(t, err, "EnumString() with out-of-bounds index should fail for ctl '%s'", ctl.Name())
+
+	// 3. Test reading values
+	isReadable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_READ)) != 0
+	if !isReadable {
+		t.Logf("Skipping enum value read/write tests for '%s' as it's not readable", ctl.Name())
+		return
+	}
+
+	originalValues := make([]int32, ctl.NumValues())
+	err = ctl.Array(&originalValues)
+	require.NoError(t, err, "Failed to read original enum values as an array for ctl '%s'", ctl.Name())
+
+	for i := uint(0); i < uint(ctl.NumValues()); i++ {
+		// Test EnumValueString against the value we just read
+		valStr, err := ctl.EnumValueString(i)
+		require.NoError(t, err, "EnumValueString(%d) failed for ctl '%s'", i, ctl.Name())
+
+		// Get the expected string using the integer value from the array
+		expectedStr, err := ctl.EnumString(uint(originalValues[i]))
+		require.NoError(t, err)
+		assert.Equal(t, expectedStr, valStr, "EnumValueString result should match EnumString(Value) for ctl '%s'", ctl.Name())
+	}
+
+	// 4. Test writing values
 	isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
-	if isWritable {
-		defer func() {
-			err := ctl.SetValue(0, originalValue)
-			if err != nil {
-				t.Logf("Warning: failed to restore original enum value for control '%s': %v", ctl.Name(), err)
-			}
-		}()
+	if !isWritable {
+		t.Logf("Skipping enum write test for '%s' as it's not writable", ctl.Name())
+		return
 	}
 
-	originalStr, err := ctl.EnumString(uint(originalValue))
+	// Defer restoration of original values using the correct SetArray method
+	defer func() {
+		err := ctl.SetArray(originalValues)
+		if err != nil {
+			t.Logf("Warning: failed to restore original enum values for control '%s': %v", ctl.Name(), err)
+		}
+	}()
+
+	// If there's only one enum item, we can't test setting a different value.
+	if numEnums < 2 {
+		t.Logf("Skipping enum write test for '%s' as it has only one item", ctl.Name())
+
+		return
+	}
+
+	// Find a target value to set that is different from the first channel's original value.
+	originalStr, err := ctl.EnumString(uint(originalValues[0]))
 	require.NoError(t, err)
 
-	// Get current value as string
-	valueStr, err := ctl.EnumValueString(0)
-	assert.NoError(t, err)
-	assert.Equal(t, originalStr, valueStr)
-
-	// Test setting by string (if writable)
-	if !isWritable {
-		return
-	}
-
-	// Find a different enum string to set
 	targetStr := ""
-	for i := uint(0); i < uint(numEnums); i++ {
-		str, _ := ctl.EnumString(i)
-		if str != originalStr {
-			targetStr = str
+	for _, s := range allEnums {
+		if s != originalStr {
+			targetStr = s
 			break
 		}
 	}
 
-	// If a different enum exists, try to set it
-	if targetStr != "" {
-		err = ctl.SetEnumByString(targetStr)
-		if err == nil {
-			newValueStr, _ := ctl.EnumValueString(0)
-			// Some controls might not actually change value even if write succeeds
-			assert.True(t, newValueStr == originalStr || newValueStr == targetStr)
-		}
+	// This case should be covered by numEnums < 2 check, but as a safeguard.
+	if targetStr == "" {
+		t.Logf("Skipping enum write test for '%s': could not find a different enum string to set (all items have same name as original)", ctl.Name())
+		return
 	}
+
+	// 5. Test SetEnumByString
+	err = ctl.SetEnumByString(targetStr)
+	require.NoError(t, err, "SetEnumByString failed for value '%s' on ctl '%s'", targetStr, ctl.Name())
+
+	// Verify that all channels were set to the new value
+	var newValues []int32
+	err = ctl.Array(&newValues)
+	require.NoError(t, err, "Failed to read back values after SetEnumByString for ctl '%s'", ctl.Name())
+
+	for i := uint(0); i < uint(ctl.NumValues()); i++ {
+		newValueStr, err := ctl.EnumString(uint(newValues[i]))
+		assert.NoError(t, err)
+		// The value should now be the target string. Some drivers might not update,
+		// so we check if it is the new value OR the original value for that specific channel.
+		originalValueForChannelStr, err := ctl.EnumString(uint(originalValues[i]))
+		require.NoError(t, err)
+		assert.True(t, newValueStr == targetStr || newValueStr == originalValueForChannelStr,
+			"Value at index %d after SetEnumByString was '%s', expected '%s' or original '%s'", i, newValueStr, targetStr, originalValueForChannelStr)
+	}
+
+	// Test SetEnumByString with a non-existent value
+	err = ctl.SetEnumByString("This Enum Value Really Does Not Exist 123")
+	assert.Error(t, err, "SetEnumByString with a non-existent value should fail for ctl '%s'", ctl.Name())
 }
 
 func testArrayCtl(t *testing.T, ctl *alsa.MixerCtl) {
