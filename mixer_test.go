@@ -553,6 +553,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
 	if !isWritable {
 		t.Logf("Skipping enum write test for '%s' as it's not writable", ctl.Name())
+
 		return
 	}
 
@@ -586,6 +587,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	// This case should be covered by numEnums < 2 check, but as a safeguard.
 	if targetStr == "" {
 		t.Logf("Skipping enum write test for '%s': could not find a different enum string to set (all items have same name as original)", ctl.Name())
+
 		return
 	}
 
