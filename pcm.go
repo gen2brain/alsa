@@ -164,7 +164,7 @@ func PcmOpen(card, device uint, flags PcmFlag, config *Config) (*PCM, error) {
 		return nil, fmt.Errorf("failed to set up status and control: %w", err)
 	}
 
-	// Set timestamp type if requested, matching tinyalsa's pcm_open logic.
+	// Set timestamp type if requested.
 	if (flags & PCM_MONOTONIC) != 0 {
 		// SNDRV_PCM_TSTAMP_TYPE_MONOTONIC = 1
 		var arg int32 = 1
@@ -419,7 +419,7 @@ func (p *PCM) SetConfig(config *Config) error {
 	p.boundary = swParams.Boundary
 
 	// 3. MMAP Buffer (if applicable)
-	// Mmap the data buffer after setting HW/SW_PARAMS, matching the standard ALSA flow (and C tinyalsa).
+	// Mmap the data buffer after setting HW/SW_PARAMS, matching the standard ALSA flow (and tinyalsa).
 	if (p.flags & PCM_MMAP) != 0 {
 		frameSize := PcmFormatToBits(p.config.Format) / 8 * p.config.Channels
 		mmapLen := int(p.bufferSize * uint32(frameSize))
@@ -807,8 +807,7 @@ func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 	return int(framesRead), nil
 }
 
-// Write writes audio samples to a PCM device. This function is for compatibility with tinyalsa's
-// deprecated pcm_write. It calculates the number of frames based on the input slice size and calls WriteI.
+// Write writes audio samples to a PCM device. It calculates the number of frames based on the input slice size and calls WriteI.
 // data must be a slice of a supported numeric type (e.g., []int16, []float32).
 // Returns nil on success or an error on failure.
 func (p *PCM) Write(data any) error {
@@ -831,8 +830,7 @@ func (p *PCM) Write(data any) error {
 	return nil
 }
 
-// Read reads audio samples from a PCM device. This function is for compatibility with tinyalsa's
-// deprecated pcm_read. It calculates the number of frames based on the buffer slice size and calls ReadI.
+// Read reads audio samples from a PCM device. It calculates the number of frames based on the buffer slice size and calls ReadI.
 // data must be a slice of a supported numeric type (e.g., []int16, []float32).
 // Returns nil on success or an error on failure.
 func (p *PCM) Read(data any) error {
@@ -939,7 +937,7 @@ func (p *PCM) Pause(enable bool) error {
 	return nil
 }
 
-// Resume resumes a suspended PCM stream.
+// Resume resumes a suspended PCM stream (system suspend, when state is SND_PCM_STATE_SUSPENDED).
 func (p *PCM) Resume() error {
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_RESUME, 0); err != nil {
 		// EINTR is a possible outcome and should be retried by the caller if needed.
@@ -1037,7 +1035,7 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 		events = unix.POLLOUT
 	}
 
-	// Always poll for errors, matching tinyalsa behavior.
+	// Always poll for errors.
 	events |= unix.POLLERR | unix.POLLNVAL | unix.POLLHUP
 
 	pfd := []unix.PollFd{
@@ -1088,30 +1086,24 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 
 // KernelState returns the current state of the PCM stream by querying the kernel.
 func (p *PCM) KernelState() PcmState {
-	if p.mmapStatus == nil {
-		// Cannot query kernel without status struct, return cached state.
-		return p.getState()
+	// If the status page is mmapped, read the state directly from it.
+	if p.syncPtrIsMmapped {
+		// Note: Without an explicit sync, this might read a slightly stale value
+		// if the state changes right before this call on a running stream.
+		// However, it avoids making an ioctl call that can fail on non-running streams,
+		// which was the cause of the original bug. The kernel initializes this value
+		// correctly when the stream is set up.
+		return p.mmapStatus.State
 	}
 
-	// Use flags=0 just to read the current status from the kernel, matching tinyalsa's pcm_state().
-	if err := p.ioctlSync(0); err != nil {
-		if errors.Is(err, syscall.EPIPE) {
-			// If the sync returns EPIPE, the stream is in XRUN.
-			return PCM_STATE_XRUN
-		}
-
-		// For other errors (e.g., device unplugged), report as disconnected.
+	// For non-mmap streams or if the status page mapping failed,
+	// we must use the STATUS ioctl to get the current state.
+	var status sndPcmStatus
+	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); err != nil {
 		return PCM_STATE_DISCONNECTED
 	}
 
-	// If ioctlSync succeeded but determined that SYNC_PTR/HWSYNC is not supported (p.noSyncPtr=true),
-	// the kernel might not update mmapStatus.State. We must rely on the cached state.
-	if p.noSyncPtr {
-		return p.getState()
-	}
-
-	// The state is updated in mmapStatus by ioctlSync.
-	return p.mmapStatus.State
+	return status.State
 }
 
 // State returns the current cached state of the PCM stream.
@@ -1262,7 +1254,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		offset += bytesToCopy
 		remainingBytes -= bytesToCopy
 
-		// This logic strictly matches tinyalsa: the stream is only auto-started if it's in the PREPARED state.
+		// The stream is only auto-started if it's in the PREPARED state.
 		// The user must call pcm.Prepare() before the first MmapWrite call.
 		if p.getState() == PCM_STATE_PREPARED {
 			avail, availErr := p.AvailUpdate()
@@ -1307,7 +1299,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 	remainingBytes := int(dataByteLen)
 
 	// A capture stream must be started to produce data.
-	// Auto-start it if it's in the PREPARED state, mirroring tinyalsa's behavior.
+	// Auto-start it if it's in the PREPARED state.
 	if p.getState() == PCM_STATE_PREPARED {
 		if err := p.Start(); err != nil {
 			return 0, err
@@ -1481,43 +1473,25 @@ func (p *PCM) MmapCommit(frames uint32) error {
 // This function is only available for MMAP streams.
 func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
 	if (p.flags & PCM_MMAP) == 0 {
-		err = fmt.Errorf("the Timestamp() is only available for MMAP streams")
+		err = fmt.Errorf("Timestamp() is only available for MMAP streams")
 
 		return
 	}
 
-	for i := 0; i < 2; i++ {
-		if syncErr := p.ioctlSync(SNDRV_PCM_SYNC_PTR_HWSYNC); syncErr != nil {
-			err = syncErr
-
-			return
-		}
-
-		p.setState(PcmState(p.mmapStatus.State))
-
-		var currentAvail SndPcmUframesT
-		if (p.flags & PCM_IN) != 0 {
-			currentAvail = p.mmapStatus.HwPtr - p.mmapControl.ApplPtr
-		} else {
-			currentAvail = p.mmapStatus.HwPtr + SndPcmUframesT(p.bufferSize) - p.mmapControl.ApplPtr
-		}
-
-		if p.boundary > 0 && currentAvail >= p.boundary {
-			currentAvail -= p.boundary
-		}
-
-		if i == 1 && uint32(currentAvail) == availFrames {
-			return
-		}
-
-		availFrames = uint32(currentAvail)
-		ts := p.mmapStatus.Tstamp
-		t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
-
-		if !p.syncPtrIsMmapped {
-			return
-		}
+	// Use the STATUS ioctl to get a consistent snapshot of pointers and timestamp.
+	var status sndPcmStatus
+	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
+		err = p.setError(ioctlErr, "ioctl STATUS failed")
+		return
 	}
+
+	p.setState(status.State)
+
+	// status.Avail is the number of frames available for I/O.
+	// For playback, it's writable space. For capture, it's readable data.
+	availFrames = uint32(status.Avail)
+	ts := status.Tstamp
+	t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
 
 	return
 }
@@ -1537,38 +1511,33 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 		return
 	}
 
-	if syncErr := p.ioctlSync(SNDRV_PCM_SYNC_PTR_HWSYNC); syncErr != nil {
-		err = syncErr
-
+	// Use the STATUS ioctl to get a consistent snapshot of pointer and timestamp.
+	var status sndPcmStatus
+	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
+		err = p.setError(ioctlErr, "ioctl STATUS failed")
+	
 		return
 	}
 
-	p.setState(PcmState(p.mmapStatus.State))
-	s := p.getState()
-	if s != PCM_STATE_RUNNING && s != PCM_STATE_DRAINING {
-		err = fmt.Errorf("invalid stream state for HWPtr: %v", s)
+	p.setState(status.State)
 
-		return
-	}
-
-	ts := p.mmapStatus.Tstamp
-	if ts.Sec == 0 && ts.Nsec == 0 {
-		err = fmt.Errorf("driver returned invalid timestamp")
-
-		return
-	}
-
-	tstamp = time.Unix(int64(ts.Sec), int64(ts.Nsec))
-	hwPtr = p.mmapStatus.HwPtr
+	// The snd-aloop driver may not provide a valid timestamp, so we don't
+	// treat a zero value as an error. The caller can check IsZero() if needed.
+	ts := status.Tstamp
+	tstamp = time.Unix(ts.Sec, ts.Nsec)
+	hwPtr = status.HwPtr
 
 	return
 }
 
 // startUnconditional starts the stream without preparing it first.
 // This is used after a write to a prepared stream.
+// startUnconditional starts the stream without preparing it first.
+// This is used after a write to a prepared stream.
 func (p *PCM) startUnconditional() error {
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
 		if errors.Is(err, syscall.EPIPE) {
+			p.xruns++
 			p.setState(PCM_STATE_XRUN)
 
 			return p.setError(err, "ioctl START failed with xrun")
@@ -2064,7 +2033,7 @@ func paramGetInt(p *sndPcmHwParams, param PcmParam) uint32 {
 	// The interval array index is the parameter value minus the value of the first interval param.
 	interval := &p.Intervals[param-PCM_PARAM_SAMPLE_BITS]
 
-	// Match tinyalsa behavior: read the MinVal of the interval.
+	// Read the MinVal of the interval.
 	// The driver finalizes the configuration by narrowing the interval.
 	return interval.MinVal
 }
