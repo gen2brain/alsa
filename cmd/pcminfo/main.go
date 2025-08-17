@@ -54,8 +54,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error getting PCM parameters: %v\n", err)
 		os.Exit(1)
 	}
-	// Ensure that the allocated resources for the parameters are freed when the function exits.
-	defer params.Free()
 
 	// The PcmParams object has a String() method that conveniently formats
 	// all the capabilities into a human-readable string, which we print here.
