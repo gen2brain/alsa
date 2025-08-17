@@ -15,7 +15,7 @@ type clong = int32
 
 // sndPcmMmapStatus contains the status of an MMAP PCM stream.
 type sndPcmMmapStatus struct {
-	State          int32 // PcmState
+	State          PcmState
 	Pad1           int32
 	HwPtr          SndPcmUframesT
 	_              [4]byte
@@ -27,18 +27,22 @@ type sndPcmMmapStatus struct {
 
 // sndPcmStatus contains the current status of a PCM stream.
 type sndPcmStatus struct {
-	State          PcmState
-	_              [4]byte // Padding
-	TriggerTstamp  kernelTimespec
-	Tstamp         kernelTimespec
-	ApplPtr        SndPcmUframesT
-	HwPtr          SndPcmUframesT
-	Delay          SndPcmSframesT
-	Avail          SndPcmUframesT
-	AvailMax       SndPcmUframesT
-	Overrange      SndPcmUframesT
-	SuspendedState PcmState
-	_              [28]byte // Reserved
+	State               PcmState
+	_                   [4]byte // Padding for timespec alignment
+	TriggerTstamp       kernelTimespec
+	Tstamp              kernelTimespec
+	ApplPtr             SndPcmUframesT
+	HwPtr               SndPcmUframesT
+	Delay               SndPcmSframesT
+	Avail               SndPcmUframesT
+	AvailMax            SndPcmUframesT
+	Overrange           SndPcmUframesT
+	SuspendedState      PcmState
+	AudioTstampData     uint32
+	AudioTstamp         kernelTimespec
+	DriverTstamp        kernelTimespec
+	AudioTstampAccuracy uint32
+	_                   [20]byte // Reserved
 }
 
 // sndCtlElemValue holds the value of a control element.

@@ -419,44 +419,6 @@ func (p *PCM) SetConfig(config *Config) error {
 	return nil
 }
 
-// xrunRecover is an internal helper to recover from an XRUN.
-func (p *PCM) xrunRecover(err error) error {
-	if !errors.Is(err, syscall.EPIPE) {
-		return err // Not an XRUN
-	}
-
-	p.xruns++
-	if (p.flags & PCM_NORESTART) != 0 {
-		p.setState(PCM_STATE_XRUN)
-
-		return p.setError(err, "xrun occurred with PCM_NORESTART")
-	}
-
-	// To recover, we must stop the stream, then re-prepare it.
-	// Stop() calls DROP and sets state to SETUP.
-	if stopErr := p.Stop(); stopErr != nil {
-		p.setState(PCM_STATE_XRUN) // Can't recover
-
-		return p.setError(stopErr, "xrun recovery failed: could not stop stream")
-	}
-
-	// After Stop(), state is SETUP. Now re-prepare.
-	// Prepare() sets state to PREPARED.
-	if prepErr := p.Prepare(); prepErr != nil {
-		p.setState(PCM_STATE_XRUN) // Can't recover
-
-		return p.setError(prepErr, "xrun recovery failed: could not prepare stream")
-	}
-
-	// For capture streams, tinyalsa also restarts them immediately.
-	// For playback, the next write will start it.
-	if (p.flags & PCM_IN) != 0 {
-		return p.startUnconditional()
-	}
-
-	return nil
-}
-
 // WriteI writes interleaved audio data to a playback PCM device using an ioctl call.
 // data must be a slice of a supported numeric type (e.g., []int16, []float32).
 // This is the idiomatic way to perform blocking I/O with ALSA.
@@ -873,27 +835,6 @@ func (p *PCM) Prepare() error {
 	return nil
 }
 
-// startUnconditional starts the stream without preparing it first.
-// This is used after a write to a prepared stream.
-func (p *PCM) startUnconditional() error {
-	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
-		if errors.Is(err, syscall.EPIPE) {
-			p.setState(PCM_STATE_XRUN)
-			p.xruns++
-
-			return p.setError(err, "ioctl START failed with xrun")
-		}
-
-		// If START fails, the stream remains in the PREPARED state.
-		// Do not reset to SETUP as the hardware is still configured.
-		return p.setError(err, "ioctl START failed")
-	}
-
-	p.setState(PCM_STATE_RUNNING)
-
-	return nil
-}
-
 // Start explicitly starts the PCM stream.
 // It ensures the stream is prepared before starting.
 func (p *PCM) Start() error {
@@ -1023,51 +964,58 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 		return false, fmt.Errorf("PCM handle not ready")
 	}
 
+	// Fast-path: if we already know we're in an error state (e.g., XRUN or SUSPENDED), propagate that immediately.
+	// Some drivers may not set POLLERR, but we still should not report readiness in these states.
+	st := p.getState()
+	if st == PCM_STATE_XRUN || st == PCM_STATE_SUSPENDED || st == PCM_STATE_DISCONNECTED {
+		return false, syscall.EPIPE
+	}
+
+	var events int16
+	if (p.flags & PCM_IN) != 0 {
+		events = unix.POLLIN
+	} else {
+		events = unix.POLLOUT
+	}
+
+	// Always poll for errors, matching tinyalsa behavior.
+	events |= unix.POLLERR | unix.POLLNVAL | unix.POLLHUP
+
 	pfd := []unix.PollFd{
-		{Fd: int32(p.file.Fd()), Events: unix.POLLIN | unix.POLLOUT | unix.POLLERR | unix.POLLNVAL},
+		{
+			Fd:     int32(p.file.Fd()),
+			Events: events,
+		},
 	}
 
-	n, err := unix.Poll(pfd, timeoutMs)
+	if timeoutMs < 0 {
+		timeoutMs = -1 // Block indefinitely
+	}
+
+	_, err := unix.Poll(pfd, timeoutMs)
 	if err != nil {
-		if errors.Is(err, syscall.EINTR) {
-			return p.Wait(timeoutMs) // Retry on interrupt
-		}
-
 		return false, p.setError(err, "poll failed")
-	}
-
-	if n == 0 {
-		return false, nil // Timeout
 	}
 
 	revents := pfd[0].Revents
 
-	if (revents & (unix.POLLERR | unix.POLLNVAL)) != 0 {
-		newState := p.KernelState()
-		p.setState(newState)
-		if newState == PCM_STATE_XRUN || newState == PCM_STATE_SUSPENDED {
-			if (p.flags & PCM_NORESTART) != 0 {
-				return false, p.setError(syscall.EPIPE, "XRUN/suspend detected with PCM_NORESTART")
-			}
-
-			if err := p.xrunRecover(syscall.EPIPE); err != nil {
-				return false, err
-			}
-
-			// After successful recovery, we are not ready for I/O, so return false.
-			return false, nil
-		}
-
-		// For other poll errors, tinyalsa returns -EIO. We must return a corresponding error
-		// to prevent infinite loops in the caller.
-		return false, p.setError(syscall.EIO, "unrecoverable poll error")
+	// Check for I/O readiness first, as this is the common case.
+	if (revents & (unix.POLLOUT | unix.POLLIN)) != 0 {
+		// Even if POLLIN/OUT is set, the stream might be in an error state (like XRUN).
+		// Some drivers signal readiness without POLLERR during XRUN.
+		// We must check the status before declaring it ready.
+		return p.checkState()
 	}
 
-	// If Poll() returned a positive value, and it was not an error handled above,
-	// it means the file descriptor is ready for I/O in some way (POLLIN, POLLOUT, POLLHUP, etc.).
-	// This matches the behavior of the C tinyalsa `pcm_wait`, which would return 1.
-	// The subsequent I/O call will then reveal the true nature of the event (e.g., fail with ENODEV on HUP).
-	return true, nil
+	// If not ready for I/O, check if an error was signaled.
+	if (revents & (unix.POLLERR | unix.POLLHUP | unix.POLLNVAL)) != 0 {
+		// If an error flag is set, we must check the status to determine the specific error.
+		return p.checkState()
+	}
+
+	// Poll returned but neither I/O readiness nor error flags are set.
+	// This is unusual but means the stream is not ready.
+	return false, nil
 }
 
 // KernelState returns the current state of the PCM stream by querying the kernel.
@@ -1083,6 +1031,7 @@ func (p *PCM) KernelState() PcmState {
 			// If the sync returns EPIPE, the stream is in XRUN.
 			return PCM_STATE_XRUN
 		}
+
 		// For other errors (e.g., device unplugged), report as disconnected.
 		return PCM_STATE_DISCONNECTED
 	}
@@ -1094,7 +1043,7 @@ func (p *PCM) KernelState() PcmState {
 	}
 
 	// The state is updated in mmapStatus by ioctlSync.
-	return PcmState(p.mmapStatus.State)
+	return p.mmapStatus.State
 }
 
 // State returns the current cached state of the PCM stream.
@@ -1166,6 +1115,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 	if (p.flags & PCM_MMAP) == 0 {
 		return 0, fmt.Errorf("MmapWrite can only be used with MMAP streams")
 	}
+
 	if (p.flags & PCM_IN) != 0 {
 		return 0, fmt.Errorf("cannot write to a capture device")
 	}
@@ -1211,12 +1161,15 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			if waitErr != nil {
 				return offset, p.setError(waitErr, "pcm wait failed")
 			}
-			if !ready { // Timeout or recovered
+
+			if !ready { // Timeout
 				if (p.flags & PCM_NONBLOCK) != 0 {
 					return offset, syscall.EAGAIN
 				}
+
 				continue
 			}
+
 			continue
 		}
 
@@ -1304,12 +1257,15 @@ func (p *PCM) MmapRead(data any) (int, error) {
 			if waitErr != nil {
 				return offset, p.setError(waitErr, "pcm wait failed")
 			}
-			if !ready { // Timeout or recovered
+
+			if !ready { // Timeout
 				if (p.flags & PCM_NONBLOCK) != 0 {
 					return offset, syscall.EAGAIN
 				}
+
 				continue
 			}
+
 			continue
 		}
 
@@ -1509,6 +1465,65 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 	return
 }
 
+// startUnconditional starts the stream without preparing it first.
+// This is used after a write to a prepared stream.
+func (p *PCM) startUnconditional() error {
+	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
+		if errors.Is(err, syscall.EPIPE) {
+			p.setState(PCM_STATE_XRUN)
+			p.xruns++
+
+			return p.setError(err, "ioctl START failed with xrun")
+		}
+
+		// If START fails, the stream remains in the PREPARED state.
+		// Do not reset to SETUP as the hardware is still configured.
+		return p.setError(err, "ioctl START failed")
+	}
+
+	p.setState(PCM_STATE_RUNNING)
+
+	return nil
+}
+
+// xrunRecover is an internal helper to recover from an XRUN.
+func (p *PCM) xrunRecover(err error) error {
+	if !errors.Is(err, syscall.EPIPE) {
+		return err // Not an XRUN
+	}
+
+	p.xruns++
+	if (p.flags & PCM_NORESTART) != 0 {
+		p.setState(PCM_STATE_XRUN)
+
+		return p.setError(err, "xrun occurred with PCM_NORESTART")
+	}
+
+	// To recover, we must stop the stream, then re-prepare it.
+	// Stop() calls DROP and sets state to SETUP.
+	if stopErr := p.Stop(); stopErr != nil {
+		p.setState(PCM_STATE_XRUN) // Can't recover
+
+		return p.setError(stopErr, "xrun recovery failed: could not stop stream")
+	}
+
+	// After Stop(), state is SETUP. Now re-prepare.
+	// Prepare() sets state to PREPARED.
+	if prepErr := p.Prepare(); prepErr != nil {
+		p.setState(PCM_STATE_XRUN) // Can't recover
+
+		return p.setError(prepErr, "xrun recovery failed: could not prepare stream")
+	}
+
+	// For capture streams, tinyalsa also restarts them immediately.
+	// For playback, the next write will start it.
+	if (p.flags & PCM_IN) != 0 {
+		return p.startUnconditional()
+	}
+
+	return nil
+}
+
 func (p *PCM) setError(err error, format string, args ...any) error {
 	msg := fmt.Sprintf(format, args...)
 	if err != nil {
@@ -1518,6 +1533,12 @@ func (p *PCM) setError(err error, format string, args ...any) error {
 	}
 
 	if err != nil {
+		// If the error we are wrapping is a known syscall error (like EPIPE, ESTRPIPE),
+		// we return it directly so that errors.Is() works correctly on the returned error.
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EIO) {
+			return err
+		}
+
 		return fmt.Errorf("%s: %w", msg, err)
 	}
 
@@ -1623,6 +1644,62 @@ func (p *PCM) ioctlSync(flags uint32) error {
 	}
 
 	return nil
+}
+
+// checkState queries the PCM status and returns an error if the stream is in an error state.
+// Returns true if the stream is ready for I/O, false otherwise (with an accompanying error if applicable).
+func (p *PCM) checkState() (bool, error) {
+	// If we already know about an error state from a prior operation, surface it.
+	stCached := p.getState()
+	switch stCached {
+	case PCM_STATE_XRUN:
+		return false, syscall.EPIPE
+	case PCM_STATE_SUSPENDED:
+		return false, syscall.ESTRPIPE
+	case PCM_STATE_DISCONNECTED:
+		return false, syscall.ENODEV
+	}
+
+	var status sndPcmStatus
+
+	// Use SNDRV_PCM_IOCTL_STATUS to get the definitive state from the kernel.
+	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
+		// If we can't get status, it's a critical failure.
+		return false, p.setError(ioctlErr, "ioctl STATUS failed")
+	}
+
+	p.setState(status.State)
+
+	// In an underrun condition, the state should be XRUN. However, some drivers
+	// might not report XRUN and instead keep the state as RUNNING, but the delay
+	// (frames left in buffer) will drop to zero or a negative value.
+	// We can use this to detect a "zombie" running state.
+	if status.State == PCM_STATE_RUNNING && (p.flags&PCM_IN) == 0 && status.Delay <= 0 {
+		p.xruns++
+		// The driver will likely recover to PREPARED, so we update our internal
+		// state to reflect that, preventing this heuristic from firing again.
+		p.setState(PCM_STATE_PREPARED)
+
+		return false, p.setError(syscall.EPIPE, "stream xrun")
+	}
+
+	switch status.State {
+	case PCM_STATE_XRUN:
+		p.xruns++
+		// Return EPIPE for XRUN, and false for readiness.
+		return false, p.setError(syscall.EPIPE, "stream xrun")
+	case PCM_STATE_SUSPENDED:
+		return false, p.setError(syscall.ESTRPIPE, "stream suspended")
+	case PCM_STATE_DISCONNECTED:
+		return false, p.setError(syscall.ENODEV, "device disconnected")
+	case PCM_STATE_OPEN, PCM_STATE_SETUP:
+		// These states should ideally not be encountered when poll indicates readiness,
+		// but if they are, the stream is not actually ready for I/O yet.
+		return false, nil
+	default:
+		// All other states (PREPARED, RUNNING, DRAINING, PAUSED) are considered ready for I/O by Wait().
+		return true, nil
+	}
 }
 
 // checkSlice validates that the input is a slice of a supported numeric type.

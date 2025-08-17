@@ -11,6 +11,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gen2brain/alsa"
@@ -77,6 +78,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmReadiTiming", testPcmReadiTiming)
 	t.Run("PcmMmapWrite", testPcmMmapWrite)
 	t.Run("PcmStop", testPcmStop)
+	t.Run("PcmWait", testPcmWait)
 	t.Run("PcmParams", testPcmParams)
 	t.Run("SetConfig", testSetConfig)
 	t.Run("PcmLink", testPcmLink)
@@ -222,6 +224,61 @@ func testPcmStop(t *testing.T) {
 	// Cleanly shut down the goroutine.
 	close(done)
 	wg.Wait()
+}
+
+func testPcmWait(t *testing.T) {
+	t.Run("Timeout", func(t *testing.T) {
+		// Use a capture stream (PCM_IN) for the timeout test.
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &kDefaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		// A stream must be prepared before a meaningful wait for I/O can occur.
+		require.NoError(t, pcm.Prepare())
+
+		// On a prepared but non-running capture stream, Wait should time out as no data is available.
+		ready, err := pcm.Wait(10) // 10ms timeout
+		assert.NoError(t, err)
+		assert.False(t, ready, "Wait should time out and return false on an empty capture stream")
+	})
+
+	t.Run("Ready", func(t *testing.T) {
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		// A prepared playback stream should be immediately ready for output.
+		require.NoError(t, pcm.Prepare())
+
+		ready, err := pcm.Wait(1000)
+		assert.NoError(t, err)
+		assert.True(t, ready, "Playback stream should be ready for writing")
+	})
+
+	t.Run("Xrun", func(t *testing.T) {
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &kDefaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		require.NoError(t, pcm.Prepare(), "Failed to prepare PCM stream")
+
+		// Start the stream without writing any data to force an underrun (XRUN).
+		// The Start call itself might return EPIPE, but the Wait call after is the key test.
+		_ = pcm.Start()
+
+		// Give the hardware a moment to enter the XRUN state.
+		// The sleep must be longer than the buffer duration to guarantee an underrun.
+		bufferDurationMs := float64(pcm.BufferSize()) * 1000.0 / float64(pcm.Rate())
+		// Add a margin to be safe.
+		sleepDuration := time.Duration(bufferDurationMs+20) * time.Millisecond
+		time.Sleep(sleepDuration)
+
+		// Now, Wait should report the XRUN state by returning an EPIPE error.
+		ready, err := pcm.Wait(100)
+		assert.False(t, ready, "Ready should be false when an XRUN has occurred")
+		require.Error(t, err, "Wait should return an error for an XRUN")
+		assert.True(t, errors.Is(err, syscall.EPIPE), "Wait should return EPIPE for an XRUN, but got: %v", err)
+	})
 }
 
 func testPcmPlaybackStartup(t *testing.T) {
