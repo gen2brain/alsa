@@ -546,9 +546,9 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 	err := m.SubscribeEvents(true)
 	if err != nil {
 		// Handle dummy devices that don't support event subscription.
-		var errno syscall.Errno
-		if errors.As(err, &errno) && errors.Is(errno, syscall.ENOTTY) {
+		if errors.Is(err, syscall.ENOTTY) {
 			t.Skipf("Skipping event test: device does not support event subscription (ENOTTY)")
+
 			return
 		}
 		require.NoError(t, err, "SubscribeEvents(true) should succeed")

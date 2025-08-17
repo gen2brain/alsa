@@ -320,14 +320,14 @@ func (p *PCM) SetConfig(config *Config) error {
 
 	paramSetMask(hwParams, PCM_PARAM_FORMAT, uint32(config.Format))
 	paramSetMask(hwParams, PCM_PARAM_SUBFORMAT, 0) // SNDRV_PCM_SUBFORMAT_STD
-	paramSetMin(hwParams, PCM_PARAM_SAMPLE_BITS, pcmFormatToRealBits(config.Format))
 	paramSetInt(hwParams, PCM_PARAM_CHANNELS, config.Channels)
 
 	// Use paramSetMin for Rate to be more flexible. This asks the driver for a rate
 	// of *at least* the requested value, allowing it to choose the nearest supported rate.
 	paramSetMin(hwParams, PCM_PARAM_RATE, config.Rate)
+
 	paramSetInt(hwParams, PCM_PARAM_PERIODS, config.PeriodCount)
-	paramSetMin(hwParams, PCM_PARAM_PERIOD_SIZE, config.PeriodSize)
+	paramSetInt(hwParams, PCM_PARAM_PERIOD_SIZE, config.PeriodSize)
 
 	if (p.flags & PCM_NOIRQ) != 0 {
 		if (p.flags & PCM_MMAP) == 0 {
@@ -481,29 +481,26 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		}
 
 		if err != nil {
-			var errno syscall.Errno
-			if errors.As(err, &errno) {
-				// For non-blocking mode, EAGAIN means the buffer is full.
-				// Stop and return the frames written so far.
-				if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(errno, syscall.EAGAIN) {
-					break
+			// For non-blocking mode, EAGAIN means the buffer is full.
+			// Stop and return the frames written so far.
+			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+				break
+			}
+
+			// EINTR is a temporary interruption; just retry the operation.
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+
+			// For underruns (EPIPE), try to recover if not disabled.
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
+				if errRec := p.xrunRecover(err); errRec != nil {
+					// Recovery failed, return what we've written and the error.
+					return int(framesWritten), errRec
 				}
 
-				// EINTR is a temporary interruption; just retry the operation.
-				if errors.Is(errno, syscall.EINTR) {
-					continue
-				}
-
-				// For underruns (EPIPE), try to recover if not disabled.
-				if (p.flags&PCM_NORESTART) == 0 && errors.Is(errno, syscall.EPIPE) {
-					if errRec := p.xrunRecover(err); errRec != nil {
-						// Recovery failed, return what we've written and the error.
-						return int(framesWritten), errRec
-					}
-
-					// Recovery succeeded, continue the loop to retry writing.
-					continue
-				}
+				// Recovery succeeded, continue the loop to retry writing.
+				continue
 			}
 
 			// For any other error, it's unrecoverable.
@@ -648,27 +645,24 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		}
 
 		if err != nil {
-			var errno syscall.Errno
-			if errors.As(err, &errno) {
-				// For non-blocking mode, EAGAIN means no data is available.
-				// Stop and return the frames read so far.
-				if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(errno, syscall.EAGAIN) {
-					break
+			// For non-blocking mode, EAGAIN means no data is available.
+			// Stop and return the frames read so far.
+			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+				break
+			}
+
+			// EINTR is a temporary interruption; just retry the operation.
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+
+			// For overruns (EPIPE), try to recover if not disabled.
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
+				if errRec := p.xrunRecover(err); errRec != nil {
+					return int(framesRead), errRec
 				}
 
-				// EINTR is a temporary interruption; just retry the operation.
-				if errors.Is(errno, syscall.EINTR) {
-					continue
-				}
-
-				// For overruns (EPIPE), try to recover if not disabled.
-				if (p.flags&PCM_NORESTART) == 0 && errors.Is(errno, syscall.EPIPE) {
-					if errRec := p.xrunRecover(err); errRec != nil {
-						return int(framesRead), errRec
-					}
-
-					continue
-				}
+				continue
 			}
 
 			// For any other error, it's unrecoverable.
@@ -1168,6 +1162,15 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 			ready, waitErr := p.Wait(timeout)
 			if waitErr != nil {
+				if errors.Is(waitErr, syscall.EPIPE) {
+					// An XRUN was detected. Recover and retry.
+					if recoveryErr := p.xrunRecover(waitErr); recoveryErr != nil {
+						return offset, recoveryErr // Recovery failed, so abort.
+					}
+
+					continue // Recovery succeeded, retry the operation.
+				}
+
 				return offset, p.setError(waitErr, "pcm wait failed")
 			}
 
@@ -1194,15 +1197,20 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		offset += bytesToCopy
 		remainingBytes -= bytesToCopy
 
-		// This logic now strictly matches tinyalsa: the stream is only auto-started
-		// if it's in the PREPARED state. The user must call pcm.Prepare() before
-		// the first MmapWrite call.
+		// This logic strictly matches tinyalsa: the stream is only auto-started if it's in the PREPARED state.
+		// The user must call pcm.Prepare() before the first MmapWrite call.
 		if p.getState() == PCM_STATE_PREPARED {
 			avail, availErr := p.AvailUpdate()
 			if availErr == nil {
 				framesInBuf := p.bufferSize - uint32(avail)
 				if framesInBuf >= p.config.StartThreshold {
 					if startErr := p.Start(); startErr != nil {
+						// If starting the stream causes an immediate underrun, treat it as a recoverable event and let the main
+						// MmapBegin/Wait loop handle the recovery.
+						if errors.Is(startErr, syscall.EPIPE) {
+							continue
+						}
+
 						return offset, startErr
 					}
 				}
@@ -1232,6 +1240,14 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 	offset := 0
 	remainingBytes := int(dataByteLen)
+
+	// A capture stream must be started to produce data.
+	// Auto-start it if it's in the PREPARED state, mirroring tinyalsa's behavior.
+	if p.getState() == PCM_STATE_PREPARED {
+		if err := p.Start(); err != nil {
+			return 0, err
+		}
+	}
 
 	for remainingBytes > 0 {
 		wantFrames := PcmBytesToFrames(p, uint32(remainingBytes))
@@ -1264,6 +1280,15 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 			ready, waitErr := p.Wait(timeout)
 			if waitErr != nil {
+				if errors.Is(waitErr, syscall.EPIPE) {
+					// An XRUN was detected. Recover and retry.
+					if recoveryErr := p.xrunRecover(waitErr); recoveryErr != nil {
+						return offset, recoveryErr // Recovery failed, so abort.
+					}
+
+					continue // Recovery succeeded, retry the operation.
+				}
+
 				return offset, p.setError(waitErr, "pcm wait failed")
 			}
 
@@ -1480,7 +1505,6 @@ func (p *PCM) startUnconditional() error {
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
 		if errors.Is(err, syscall.EPIPE) {
 			p.setState(PCM_STATE_XRUN)
-			p.xruns++
 
 			return p.setError(err, "ioctl START failed with xrun")
 		}
@@ -1542,9 +1566,11 @@ func (p *PCM) setError(err error, format string, args ...any) error {
 	}
 
 	if err != nil {
-		// If the error we are wrapping is a known syscall error (like EPIPE, ESTRPIPE),
-		// we return it directly so that errors.Is() works correctly on the returned error.
-		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EIO) {
+		// If the error we are wrapping is a known syscall error, we return it directly so that errors.Is() works correctly on the returned error.
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EIO) ||
+			errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.EINVAL) ||
+			errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EINTR) {
+
 			return err
 		}
 

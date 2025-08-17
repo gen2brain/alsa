@@ -124,8 +124,7 @@ func testPcmOpenAndClose(t *testing.T) {
 				// The TTSTAMP ioctl for PCM_MONOTONIC is not supported by all kernels/devices.
 				// If it fails with ENOTTY or EINVAL, skip the test gracefully.
 				if tc.flags&alsa.PCM_MONOTONIC != 0 {
-					var errno syscall.Errno
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.ENOTTY) || errors.Is(errno, syscall.EINVAL)) {
+					if errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.EINVAL) {
 						t.Skipf("Skipping monotonic test, TTSTAMP ioctl not supported by device: %v", err)
 
 						return
@@ -317,8 +316,7 @@ func testPcmPlaybackStartup(t *testing.T) {
 
 		// We don't need to check the error here; we just need to unblock the writer.
 		// But for robustness, we check for EBADF, which can happen during teardown.
-		var errno syscall.Errno
-		if readErr != nil && (!errors.As(readErr, &errno) || (!errors.Is(errno, syscall.EBADF) && !errors.Is(errno, syscall.EPIPE))) {
+		if readErr != nil && (!errors.Is(err, syscall.EBADF) && !errors.Is(err, syscall.EPIPE)) {
 			// In a real test, we'd probably send this error back to the main thread.
 			t.Logf("capture goroutine ReadI failed: %v", readErr)
 		}
@@ -445,9 +443,8 @@ func testPcmWriteiTiming(t *testing.T) {
 				// This will block until the producer (main thread) starts writing.
 				_, err := capturePcm.ReadI(captureBuffer, frames)
 				if err != nil {
-					var errno syscall.Errno
 					// EBADF is expected if the main test closes the PCM before this goroutine exits.
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE)) {
+					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) {
 						return
 					}
 
@@ -552,8 +549,7 @@ func testPcmReadiTiming(t *testing.T) {
 			default:
 				_, err := playbackPcm.WriteI(playbackBuffer, frames)
 				if err != nil {
-					var errno syscall.Errno
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE)) {
+					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) {
 						return
 					}
 
@@ -640,13 +636,12 @@ func testPcmMmapWrite(t *testing.T) {
 				// This will block until the producer starts writing.
 				_, err := capturePcm.MmapRead(readBuffer)
 				if err != nil {
-					var errno syscall.Errno
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE)) {
+					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) {
 						return
 					}
 
 					// EAGAIN is okay, just continue the loop
-					if errors.As(err, &errno) && errors.Is(errno, syscall.EAGAIN) {
+					if errors.Is(err, syscall.EAGAIN) {
 						continue
 					}
 
@@ -674,13 +669,12 @@ func testPcmMmapWrite(t *testing.T) {
 		// The first MmapWrite will auto-start the linked streams.
 		written, err := pcm.MmapWrite(buffer)
 		if err != nil {
-			var errno syscall.Errno
-			if errors.As(err, &errno) && errors.Is(errno, syscall.ENOTTY) {
+			if errors.Is(err, syscall.ENOTTY) {
 				t.Skip("Skipping MMAP test: device does not support HWSYNC/SYNC_PTR (ENOTTY)")
 			}
 
 			// EAGAIN is okay, just continue the loop
-			if errors.As(err, &errno) && errors.Is(errno, syscall.EAGAIN) {
+			if errors.Is(err, syscall.EAGAIN) {
 				i-- // Retry this iteration
 
 				continue
@@ -859,8 +853,7 @@ func testPcmDrain(t *testing.T) {
 			default:
 				_, err := capturePcm.ReadI(captureBuffer, frames)
 				if err != nil {
-					var errno syscall.Errno
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE)) {
+					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) {
 						return
 					}
 
@@ -979,11 +972,11 @@ func testPcmPause(t *testing.T) {
 	// Pause the stream. The I/O goroutines should now block.
 	err = pcm.Pause(true)
 	if err != nil {
-		var errno syscall.Errno
-		if errors.As(err, &errno) && (errors.Is(errno, syscall.ENOTTY) || errors.Is(errno, syscall.ENOSYS)) {
+		if errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.ENOSYS) {
 			t.Skipf("Skipping pause test, PAUSE ioctl is not supported: %v", err)
 			close(done)
 			wg.Wait()
+
 			return
 		}
 		require.NoError(t, err, "pcm.Pause(true) failed")
@@ -1038,6 +1031,14 @@ func testPcmLoopback(t *testing.T) {
 
 			config := kDefaultConfig
 			config.Format = tf.format
+			// Set a large start threshold to prevent underruns at the beginning of the stream.
+			// This gives the writer goroutine time to run and fill the buffer before the
+			// hardware needs the first sample. A threshold of buffer_size - 1 period is robust.
+			if config.PeriodCount > 1 {
+				config.StartThreshold = config.PeriodSize * (config.PeriodCount - 1)
+			} else {
+				config.StartThreshold = config.PeriodSize
+			}
 
 			// Open playback stream
 			pcmOut, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
@@ -1105,19 +1106,16 @@ func testPcmLoopback(t *testing.T) {
 					default:
 						read, err := pcmIn.ReadI(buffer, frames)
 						if err != nil {
-							var errno syscall.Errno
-							if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE)) {
+							// EPIPE means XRUN (overrun), EBADF can happen on close. These are expected during a racy shutdown/teardown.
+							if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) {
 								return
 							}
-
 							setCaptureErr(fmt.Errorf("the ReadI failed on iteration %d: %w", counter, err))
-
 							return
 						}
 
 						if read != int(frames) {
 							setCaptureErr(fmt.Errorf("short read on iteration %d: got %d frames, want %d", counter, read, frames))
-
 							return
 						}
 
@@ -1136,7 +1134,6 @@ func testPcmLoopback(t *testing.T) {
 							e := energy(buffer, config.Format)
 							if e <= 0.0 {
 								setCaptureErr(fmt.Errorf("captured signal has no energy (e=%.2f) on iteration %d", e, counter))
-
 								return
 							}
 						}
@@ -1166,18 +1163,15 @@ func testPcmLoopback(t *testing.T) {
 						generator.Read(buffer)
 						written, err := pcmOut.WriteI(buffer, frames)
 						if err != nil {
-							var errno syscall.Errno
-							if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE)) {
+							// EPIPE means XRUN (underrun), EBADF can happen on close. These are expected during a racy shutdown/teardown.
+							if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) {
 								return
 							}
-
 							setPlaybackErr(fmt.Errorf("the WriteI failed on iteration %d: %w", counter, err))
-
 							return
 						}
 						if written != int(frames) {
 							setPlaybackErr(fmt.Errorf("short write on iteration %d: got %d frames, want %d", counter, written, frames))
-
 							return
 						}
 
@@ -1206,6 +1200,12 @@ func testPcmLoopback(t *testing.T) {
 func testPcmMmapLoopback(t *testing.T) {
 	config := kDefaultConfig
 	config.Format = alsa.PCM_FORMAT_S16_LE
+	// Set a large start threshold to prevent underruns at the beginning of the stream.
+	if config.PeriodCount > 1 {
+		config.StartThreshold = config.PeriodSize * (config.PeriodCount - 1)
+	} else {
+		config.StartThreshold = config.PeriodSize
+	}
 
 	// Ensure the loopback device supports the required format and MMAP access.
 	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
@@ -1284,18 +1284,15 @@ func testPcmMmapLoopback(t *testing.T) {
 			default:
 				read, err := pcmIn.MmapRead(buffer)
 				if err != nil {
-					var errno syscall.Errno
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE) || errors.Is(errno, syscall.EAGAIN)) {
+					// These errors are expected during concurrent operation or shutdown.
+					if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EAGAIN) {
 						// For EAGAIN in a loopback test, we expect data soon, so continue unless done.
 						if errors.Is(err, syscall.EAGAIN) {
 							continue
 						}
-
 						return
 					}
-
 					setCaptureErr(fmt.Errorf("MmapRead failed on iteration %d: %w", counter, err))
-
 					return
 				}
 				if read == 0 {
@@ -1317,7 +1314,6 @@ func testPcmMmapLoopback(t *testing.T) {
 					e := energy(buffer[:read], config.Format)
 					if e <= 0.0 {
 						setCaptureErr(fmt.Errorf("captured signal has no energy (e=%.2f) on iteration %d", e, counter))
-
 						return
 					}
 				}
@@ -1345,23 +1341,19 @@ func testPcmMmapLoopback(t *testing.T) {
 				generator.Read(buffer)
 				written, err := pcmOut.MmapWrite(buffer)
 				if err != nil {
-					var errno syscall.Errno
-					if errors.As(err, &errno) && (errors.Is(errno, syscall.EBADF) || errors.Is(errno, syscall.EPIPE) || errors.Is(errno, syscall.EAGAIN)) {
+					// These errors are expected during concurrent operation or shutdown.
+					if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EAGAIN) {
 						// EAGAIN might happen if the buffer is momentarily full.
 						if errors.Is(err, syscall.EAGAIN) {
 							continue
 						}
-
 						return
 					}
-
 					setPlaybackErr(fmt.Errorf("MmapWrite failed on iteration %d: %w", counter, err))
-
 					return
 				}
 				if written != len(buffer) {
 					setPlaybackErr(fmt.Errorf("short mmap write on iteration %d: got %d, want %d", counter, written, len(buffer)))
-
 					return
 				}
 
@@ -1377,8 +1369,10 @@ func testPcmMmapLoopback(t *testing.T) {
 
 	// Run for a short period to allow playback and capture.
 	time.Sleep(500 * time.Millisecond)
+	// Signal goroutines to stop, then wait for them before stopping the PCM stream.
 	close(done)
 	wg.Wait()
+	// Now that the I/O goroutines are finished, it's safe to stop the stream.
 	pcmOut.Stop()
 
 	// Check for errors that occurred in the goroutines.
