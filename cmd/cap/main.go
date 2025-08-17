@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -86,6 +85,12 @@ func main() {
 	}
 	defer pcm.Close()
 
+	// A stream must be in the PREPARED state before it can be read from.
+	if err := pcm.Prepare(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error preparing ALSA device: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Create the output WAV file.
 	wavFile, err := os.Create(outputPath)
 	if err != nil {
@@ -128,12 +133,12 @@ func main() {
 			// Read interleaved audio data from the ALSA device.
 			read, err := pcm.ReadI(buffer, chunkFrames)
 			if err != nil {
+				// The library's ReadI function attempts to recover from overruns (EPIPE),
+				// so if we get an error here, it's likely unrecoverable.
 				fmt.Fprintf(os.Stderr, "Error reading from ALSA device: %v\n", err)
-				if errors.Is(err, syscall.EPIPE) {
-					fmt.Fprintln(os.Stderr, "Got EPIPE (overrun), and recovery failed.")
-				}
+				keepRunning = false
 
-				break
+				continue
 			}
 
 			if read > 0 {
@@ -167,6 +172,8 @@ func determineFormat(formatStr string) (alsa.PcmFormat, int, error) {
 	case "s16":
 		return alsa.PCM_FORMAT_S16_LE, 16, nil
 	case "s24":
+		// Note: S24_LE in ALSA is 24 bits of data packed into a 32-bit integer.
+		// The wav encoder expects the bit depth to be 24.
 		return alsa.PCM_FORMAT_S24_LE, 24, nil
 	case "s32":
 		return alsa.PCM_FORMAT_S32_LE, 32, nil
@@ -190,14 +197,18 @@ func bytesToIntBuffer(data []byte, format alsa.PcmFormat, channels int) (*audio.
 	for i := 0; i < numSamples; i++ {
 		switch format {
 		case alsa.PCM_FORMAT_S16_LE:
-			sample := int16(le.Uint16(data[offset:]))
+			sample := int16(binary.LittleEndian.Uint16(data[offset:]))
 			intData[i] = int(sample)
 		case alsa.PCM_FORMAT_S24_LE:
-			// S24_LE is stored in 32 bits, so we read 4 bytes and shift.
-			sample := int32(le.Uint32(data[offset:])) >> 8
-			intData[i] = int(sample)
+			// S24_LE is stored in 32 bits (4 bytes), with the upper 8 bits unused.
+			// We read 3 bytes in little-endian order and sign-extend it.
+			val := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16
+			if val&0x800000 != 0 { // Check if the 24th bit is set (negative)
+				val |= 0xFF000000 // Sign extend
+			}
+			intData[i] = int(int32(val))
 		case alsa.PCM_FORMAT_S32_LE:
-			sample := int32(le.Uint32(data[offset:]))
+			sample := int32(binary.LittleEndian.Uint32(data[offset:]))
 			intData[i] = int(sample)
 		default:
 			return nil, fmt.Errorf("unhandled ALSA format in conversion: %v", format)
@@ -205,25 +216,22 @@ func bytesToIntBuffer(data []byte, format alsa.PcmFormat, channels int) (*audio.
 		offset += bytesPerSample
 	}
 
+	bitDepth := 0
+	switch format {
+	case alsa.PCM_FORMAT_S16_LE:
+		bitDepth = 16
+	case alsa.PCM_FORMAT_S24_LE:
+		bitDepth = 24
+	case alsa.PCM_FORMAT_S32_LE:
+		bitDepth = 32
+	}
+
 	return &audio.IntBuffer{
 		Format: &audio.Format{
 			NumChannels: channels,
+			SampleRate:  0, // Sample rate is set on the encoder, not needed here.
 		},
 		Data:           intData,
-		SourceBitDepth: bytesPerSample * 8,
+		SourceBitDepth: bitDepth,
 	}, nil
-}
-
-var le = binary.LittleEndian
-
-type ble struct{}
-
-func (ble) Uint16(b []byte) uint16 {
-	_ = b[1] // bounds check a hint to compiler
-	return uint16(b[0]) | uint16(b[1])<<8
-}
-
-func (ble) Uint32(b []byte) uint32 {
-	_ = b[3] // bounds check a hint to compiler
-	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }
