@@ -449,10 +449,6 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		return 0, p.setError(nil, "cannot write to a capture device")
 	}
 
-	if (p.flags & PCM_MMAP) != 0 {
-		return 0, p.setError(nil, "use MmapWrite for mmap devices")
-	}
-
 	byteLen, err := checkSlice(data)
 	if err != nil {
 		return 0, p.setError(err, "invalid data type for WriteI")
@@ -472,6 +468,12 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 
 	// Prepare stream if it's not already running or prepared.
 	s := p.getState()
+	if s == PCM_STATE_XRUN {
+		// If the stream is in XRUN, it must be manually prepared before writing again.
+		// This is especially important for NORESTART streams.
+		return 0, syscall.EPIPE
+	}
+
 	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
@@ -562,6 +564,10 @@ func (p *PCM) WriteN(data any, frames uint32) (int, error) {
 	defer runtime.KeepAlive(data)
 
 	s := p.getState()
+	if s == PCM_STATE_XRUN {
+		return 0, syscall.EPIPE
+	}
+
 	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
@@ -656,12 +662,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 	defer runtime.KeepAlive(buffer)
 
-	s := p.getState()
-	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
-		if err := p.Prepare(); err != nil {
-			return 0, err
-		}
-	}
+	// Stream is auto-started by the first read, so no explicit p.Start() is needed.
 
 	bufferPtr := uintptr(0)
 	if reflect.ValueOf(buffer).Len() > 0 {
@@ -710,10 +711,10 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 			return int(framesRead), p.setError(err, "ioctl READI_FRAMES failed")
 		}
+	}
 
-		if p.getState() != PCM_STATE_RUNNING {
-			p.setState(PCM_STATE_RUNNING)
-		}
+	if p.getState() != PCM_STATE_RUNNING {
+		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return int(framesRead), nil
@@ -745,12 +746,8 @@ func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 
 	defer runtime.KeepAlive(buffers)
 
-	s := p.getState()
-	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
-		if err := p.Prepare(); err != nil {
-			return 0, err
-		}
-	}
+	// Stream is auto-started by the first read, so no explicit p.Start() is needed.
+	// This avoids race conditions with linked streams.
 
 	defer runtime.KeepAlive(pointers)
 
@@ -798,10 +795,10 @@ func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 
 			return int(framesRead), p.setError(err, "ioctl READN_FRAMES failed")
 		}
+	}
 
-		if p.getState() != PCM_STATE_RUNNING {
-			p.setState(PCM_STATE_RUNNING)
-		}
+	if p.getState() != PCM_STATE_RUNNING {
+		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return int(framesRead), nil
@@ -1298,14 +1295,6 @@ func (p *PCM) MmapRead(data any) (int, error) {
 	offset := 0
 	remainingBytes := int(dataByteLen)
 
-	// A capture stream must be started to produce data.
-	// Auto-start it if it's in the PREPARED state.
-	if p.getState() == PCM_STATE_PREPARED {
-		if err := p.Start(); err != nil {
-			return 0, err
-		}
-	}
-
 	for remainingBytes > 0 {
 		wantFrames := PcmBytesToFrames(p, uint32(remainingBytes))
 		if wantFrames == 0 {
@@ -1515,7 +1504,7 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 	var status sndPcmStatus
 	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
 		err = p.setError(ioctlErr, "ioctl STATUS failed")
-	
+
 		return
 	}
 
@@ -1532,10 +1521,17 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 
 // startUnconditional starts the stream without preparing it first.
 // This is used after a write to a prepared stream.
-// startUnconditional starts the stream without preparing it first.
-// This is used after a write to a prepared stream.
 func (p *PCM) startUnconditional() error {
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
+		// If the stream is already running (e.g., started by a linked stream),
+		// the kernel will return EBUSY. We treat this as a success and update
+		// our cached state to RUNNING to resolve the race condition.
+		if errors.Is(err, syscall.EBUSY) {
+			p.setState(PCM_STATE_RUNNING)
+
+			return nil
+		}
+
 		if errors.Is(err, syscall.EPIPE) {
 			p.xruns++
 			p.setState(PCM_STATE_XRUN)
@@ -1566,8 +1562,26 @@ func (p *PCM) xrunRecover(err error) error {
 		return p.setError(err, "xrun occurred with PCM_NORESTART")
 	}
 
-	// To recover, we must stop the stream, then re-prepare it.
-	// Stop() calls DROP and sets state to SETUP.
+	// For MMAP streams, recovery is just preparing the stream.
+	if (p.flags & PCM_MMAP) != 0 {
+		if prepErr := p.Prepare(); prepErr != nil {
+			p.setState(PCM_STATE_XRUN) // Can't recover
+
+			return p.setError(prepErr, "xrun recovery failed: could not prepare mmap stream")
+		}
+
+		// For capture streams, we must also restart them to get data flowing again.
+		if (p.flags & PCM_IN) != 0 {
+			if startErr := p.Start(); startErr != nil {
+				// If start fails, we are still in a bad state.
+				return p.setError(startErr, "xrun recovery failed: could not start mmap capture stream")
+			}
+		}
+
+		return nil
+	}
+
+	// For non-MMAP streams, the sequence is stop, prepare, and (for capture) start.
 	if stopErr := p.Stop(); stopErr != nil {
 		p.setState(PCM_STATE_XRUN) // Can't recover
 
@@ -1585,7 +1599,7 @@ func (p *PCM) xrunRecover(err error) error {
 	// For capture streams, tinyalsa also restarts them immediately.
 	// For playback, the next write will start it.
 	if (p.flags & PCM_IN) != 0 {
-		return p.startUnconditional()
+		return p.Start()
 	}
 
 	return nil
