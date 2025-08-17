@@ -992,9 +992,18 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 		timeoutMs = -1 // Block indefinitely
 	}
 
-	_, err := unix.Poll(pfd, timeoutMs)
-	if err != nil {
-		return false, p.setError(err, "poll failed")
+	for {
+		_, err := unix.Poll(pfd, timeoutMs)
+		if err == nil {
+			break // Success or timeout, break to check revents
+		}
+
+		// If we got an error, and it's not EINTR, it's a real error.
+		if !errors.Is(err, syscall.EINTR) {
+			return false, p.setError(err, "poll failed")
+		}
+
+		// If it was EINTR, loop again.
 	}
 
 	revents := pfd[0].Revents
