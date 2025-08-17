@@ -328,9 +328,13 @@ func (p *PCM) SetConfig(config *Config) error {
 	paramInit(hwParams)
 
 	if (p.flags & PCM_MMAP) != 0 {
-		paramSetMask(hwParams, PCM_PARAM_ACCESS, 0) // SNDRV_PCM_ACCESS_MMAP_INTERLEAVED
+		paramSetMask(hwParams, PCM_PARAM_ACCESS, SNDRV_PCM_ACCESS_MMAP_INTERLEAVED)
 	} else {
-		paramSetMask(hwParams, PCM_PARAM_ACCESS, 3) // SNDRV_PCM_ACCESS_RW_INTERLEAVED
+		if (p.flags & PCM_NONINTERLEAVED) != 0 {
+			paramSetMask(hwParams, PCM_PARAM_ACCESS, SNDRV_PCM_ACCESS_RW_NONINTERLEAVED)
+		} else {
+			paramSetMask(hwParams, PCM_PARAM_ACCESS, SNDRV_PCM_ACCESS_RW_INTERLEAVED)
+		}
 	}
 
 	paramSetMask(hwParams, PCM_PARAM_FORMAT, uint32(config.Format))
@@ -552,25 +556,14 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 
 	bytesPerFramePerChannel := PcmFormatToBits(p.config.Format) / 8
 	requiredBytes := frames * bytesPerFramePerChannel
+
 	for i, channelData := range data {
 		if uint32(len(channelData)) < requiredBytes {
 			return 0, p.setError(nil, "channel %d buffer too small: needs %d, got %d", i, requiredBytes, len(channelData))
 		}
 	}
 
-	pointers := make([]unsafe.Pointer, p.config.Channels)
-	for i, channelData := range data {
-		if len(channelData) > 0 {
-			pointers[i] = unsafe.Pointer(&channelData[0])
-		}
-	}
 	defer runtime.KeepAlive(data)
-
-	xfer := sndXfern{Frames: SndPcmUframesT(frames)}
-	if len(pointers) > 0 {
-		xfer.Bufs = uintptr(unsafe.Pointer(&pointers[0]))
-	}
-	defer runtime.KeepAlive(pointers)
 
 	s := p.getState()
 	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
@@ -579,25 +572,67 @@ func (p *PCM) WriteN(data [][]byte, frames uint32) (int, error) {
 		}
 	}
 
-	err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEN_FRAMES, uintptr(unsafe.Pointer(&xfer)))
-	if err != nil && (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
-		if errRec := p.xrunRecover(err); errRec != nil {
-			return 0, errRec
+	pointers := make([]uintptr, p.config.Channels)
+	for i := range data {
+		if len(data[i]) > 0 {
+			pointers[i] = uintptr(unsafe.Pointer(&data[i][0]))
 		}
-		err = ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEN_FRAMES, uintptr(unsafe.Pointer(&xfer)))
 	}
 
-	if err != nil {
-		p.setState(PCM_STATE_XRUN)
+	defer runtime.KeepAlive(pointers)
 
-		return 0, p.setError(err, "ioctl WRITEN_FRAMES failed")
+	framesWritten := uint32(0)
+	for framesWritten < frames {
+		remainingFrames := frames - framesWritten
+
+		xfer := sndXfern{
+			Frames: SndPcmUframesT(remainingFrames),
+			Bufs:   uintptr(unsafe.Pointer(&pointers[0])),
+		}
+
+		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEN_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+
+		if xfer.Result > 0 {
+			framesAdvanced := uint32(xfer.Result)
+			framesWritten += framesAdvanced
+
+			// Update pointers for the next iteration
+			if framesWritten < frames {
+				offsetBytes := framesAdvanced * bytesPerFramePerChannel
+				for i := range pointers {
+					pointers[i] += uintptr(offsetBytes)
+				}
+			}
+		}
+
+		if err != nil {
+			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+				break
+			}
+
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
+				if errRec := p.xrunRecover(err); errRec != nil {
+					return int(framesWritten), errRec
+				}
+
+				continue
+			}
+
+			p.setState(PCM_STATE_XRUN)
+
+			return int(framesWritten), p.setError(err, "ioctl WRITEN_FRAMES failed")
+		}
+
+		if p.getState() != PCM_STATE_RUNNING {
+			p.setState(PCM_STATE_RUNNING)
+		}
 	}
 
-	if p.getState() != PCM_STATE_RUNNING {
-		p.setState(PCM_STATE_RUNNING)
-	}
-
-	return xfer.Result, nil
+	return int(framesWritten), nil
 }
 
 // ReadI reads interleaved audio data from a capture PCM device using an ioctl call.
@@ -715,26 +750,14 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 
 	bytesPerFramePerChannel := PcmFormatToBits(p.config.Format) / 8
 	requiredBytes := frames * bytesPerFramePerChannel
+
 	for i, channelBuffer := range buffers {
 		if uint32(len(channelBuffer)) < requiredBytes {
 			return 0, p.setError(nil, "channel %d buffer too small: needs %d, got %d", i, requiredBytes, len(channelBuffer))
 		}
 	}
 
-	pointers := make([]unsafe.Pointer, p.config.Channels)
-	for i, channelBuffer := range buffers {
-		if len(channelBuffer) == 0 {
-			return 0, p.setError(nil, "channel buffer %d is empty or nil", i)
-		}
-		pointers[i] = unsafe.Pointer(&channelBuffer[0])
-	}
 	defer runtime.KeepAlive(buffers)
-
-	xfer := sndXfern{Frames: SndPcmUframesT(frames)}
-	if len(pointers) > 0 {
-		xfer.Bufs = uintptr(unsafe.Pointer(&pointers[0]))
-	}
-	defer runtime.KeepAlive(pointers)
 
 	s := p.getState()
 	if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
@@ -743,24 +766,65 @@ func (p *PCM) ReadN(buffers [][]byte, frames uint32) (int, error) {
 		}
 	}
 
-	err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READN_FRAMES, uintptr(unsafe.Pointer(&xfer)))
-	if err != nil && (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
-		if errRec := p.xrunRecover(err); errRec != nil {
-			return 0, errRec
+	pointers := make([]uintptr, p.config.Channels)
+	for i := range buffers {
+		if len(buffers[i]) > 0 {
+			pointers[i] = uintptr(unsafe.Pointer(&buffers[i][0]))
 		}
-		err = ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READN_FRAMES, uintptr(unsafe.Pointer(&xfer)))
 	}
 
-	if err != nil {
-		p.setState(PCM_STATE_XRUN)
-		return 0, p.setError(err, "ioctl READN_FRAMES failed")
+	defer runtime.KeepAlive(pointers)
+
+	framesRead := uint32(0)
+	for framesRead < frames {
+		remainingFrames := frames - framesRead
+
+		xfer := sndXfern{
+			Frames: SndPcmUframesT(remainingFrames),
+			Bufs:   uintptr(unsafe.Pointer(&pointers[0])),
+		}
+
+		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READN_FRAMES, uintptr(unsafe.Pointer(&xfer)))
+
+		if xfer.Result > 0 {
+			framesAdvanced := uint32(xfer.Result)
+			framesRead += framesAdvanced
+			if framesRead < frames {
+				offsetBytes := framesAdvanced * bytesPerFramePerChannel
+				for i := range pointers {
+					pointers[i] += uintptr(offsetBytes)
+				}
+			}
+		}
+
+		if err != nil {
+			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+				break
+			}
+
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) {
+				if errRec := p.xrunRecover(err); errRec != nil {
+					return int(framesRead), errRec
+				}
+
+				continue
+			}
+
+			p.setState(PCM_STATE_XRUN)
+
+			return int(framesRead), p.setError(err, "ioctl READN_FRAMES failed")
+		}
+
+		if p.getState() != PCM_STATE_RUNNING {
+			p.setState(PCM_STATE_RUNNING)
+		}
 	}
 
-	if p.getState() != PCM_STATE_RUNNING {
-		p.setState(PCM_STATE_RUNNING)
-	}
-
-	return xfer.Result, nil
+	return int(framesRead), nil
 }
 
 // Write writes audio samples to a PCM device. This function is for compatibility with tinyalsa's

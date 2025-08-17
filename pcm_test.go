@@ -74,6 +74,8 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmWriteiFailsOnCapture", testPcmWriteiFailsOnCapture)
 	t.Run("PcmReadiFailsOnPlayback", testPcmReadiFailsOnPlayback)
 	t.Run("PcmWriteiTiming", testPcmWriteiTiming)
+	t.Run("PcmWriteNFailsOnCapture", testPcmWriteNFailsOnCapture)
+	t.Run("PcmReadNFailsOnPlayback", testPcmReadNFailsOnPlayback)
 	t.Run("PcmGetDelay", testPcmGetDelay)
 	t.Run("PcmReadiTiming", testPcmReadiTiming)
 	t.Run("PcmMmapWrite", testPcmMmapWrite)
@@ -86,6 +88,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmPause", testPcmPause)
 	t.Run("PcmLoopback", testPcmLoopback)
 	t.Run("PcmMmapLoopback", testPcmMmapLoopback)
+	t.Run("PcmLoopbackNonInterleaved", testPcmLoopbackNonInterleaved)
 }
 
 func testPcmOpenAndClose(t *testing.T) {
@@ -403,6 +406,209 @@ func testPcmReadiFailsOnPlayback(t *testing.T) {
 
 	require.Error(t, err, "expected error when calling ReadI on a playback stream")
 	require.Contains(t, err.Error(), "cannot read from a playback device")
+}
+
+func testPcmWriteNFailsOnCapture(t *testing.T) {
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_NONINTERLEAVED, &defaultConfig)
+	if err != nil {
+		if errors.Is(err, syscall.EINVAL) {
+			t.Skipf("Device does not support non-interleaved access, skipping test: %v", err)
+		}
+
+		require.NoError(t, err)
+	}
+	defer capturePcm.Close()
+
+	buffers := make([][]byte, defaultConfig.Channels)
+	bytesPerChannel := alsa.PcmFramesToBytes(capturePcm, 128) / defaultConfig.Channels
+	for i := range buffers {
+		buffers[i] = make([]byte, bytesPerChannel)
+	}
+
+	_, err = capturePcm.WriteN(buffers, 128)
+	require.Error(t, err, "expected error when calling WriteN on a capture stream")
+}
+
+func testPcmReadNFailsOnPlayback(t *testing.T) {
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_NONINTERLEAVED, &defaultConfig)
+	if err != nil {
+		if errors.Is(err, syscall.EINVAL) {
+			t.Skipf("Device does not support non-interleaved access, skipping test: %v", err)
+		}
+
+		require.NoError(t, err)
+	}
+	defer pcm.Close()
+
+	buffers := make([][]byte, defaultConfig.Channels)
+	bytesPerChannel := alsa.PcmFramesToBytes(pcm, 128) / defaultConfig.Channels
+	for i := range buffers {
+		buffers[i] = make([]byte, bytesPerChannel)
+	}
+
+	_, err = pcm.ReadN(buffers, 128)
+	require.Error(t, err, "expected error when calling ReadN on a playback stream")
+	require.Contains(t, err.Error(), "cannot read from a playback device")
+}
+
+func testPcmLoopbackNonInterleaved(t *testing.T) {
+	// 1. Check if the hardware supports non-interleaved access.
+	params, err := alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
+	if err != nil {
+		t.Skipf("Could not get refined params to check for non-interleaved support, skipping: %v", err)
+	}
+
+	accessMask, err := params.Mask(alsa.PCM_PARAM_ACCESS)
+	require.NoError(t, err)
+
+	if !accessMask.Test(alsa.SNDRV_PCM_ACCESS_RW_NONINTERLEAVED) {
+		t.Skip("Device does not support non-interleaved RW access")
+	}
+
+	// 2. Setup PCMs with non-interleaved flag.
+	config := defaultConfig
+	// Set a large start threshold to prevent underruns at the beginning of the stream.
+	if config.PeriodCount > 1 {
+		config.StartThreshold = config.PeriodSize * (config.PeriodCount - 1)
+	} else {
+		config.StartThreshold = config.PeriodSize
+	}
+
+	flagsOut := alsa.PCM_OUT | alsa.PCM_NONINTERLEAVED
+	pcmOut, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), flagsOut, &config)
+	require.NoError(t, err, "PcmOpen(playback, non-interleaved) failed")
+	defer pcmOut.Close()
+
+	// Capture side config must match
+	flagsIn := alsa.PCM_IN | alsa.PCM_NONINTERLEAVED
+	pcmIn, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), flagsIn, &config)
+	require.NoError(t, err, "PcmOpen(capture, non-interleaved) failed")
+	defer pcmIn.Close()
+
+	// Link for synchronous start
+	err = pcmOut.Link(pcmIn)
+	if err != nil {
+		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
+	}
+	defer pcmOut.Unlink()
+
+	// Explicitly prepare before starting goroutines for stability.
+	require.NoError(t, pcmOut.Prepare(), "playback stream prepare failed")
+	require.NoError(t, pcmIn.Prepare(), "capture stream prepare failed")
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	var readErr, writeErr error
+	var readErrMtx, writeErrMtx sync.Mutex
+
+	setReadErr := func(e error) {
+		readErrMtx.Lock()
+		defer readErrMtx.Unlock()
+		if readErr == nil {
+			readErr = e
+		}
+	}
+
+	setWriteErr := func(e error) {
+		writeErrMtx.Lock()
+		defer writeErrMtx.Unlock()
+		if writeErr == nil {
+			writeErr = e
+		}
+	}
+
+	wg.Add(2)
+
+	// Reader goroutine
+	go func() {
+		defer wg.Done()
+		framesPerPeriod := pcmIn.PeriodSize()
+		bytesPerChannel := alsa.PcmFramesToBytes(pcmIn, 1) / config.Channels
+		readBuffer := make([][]byte, config.Channels)
+		for c := range readBuffer {
+			readBuffer[c] = make([]byte, bytesPerChannel*framesPerPeriod)
+		}
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				// Read one period of data
+				read, err := pcmIn.ReadN(readBuffer, framesPerPeriod)
+				if err != nil {
+					// EBADF can happen on shutdown, which is not an error.
+					if errors.Is(err, syscall.EBADF) {
+						return
+					}
+
+					setReadErr(fmt.Errorf("ReadN failed inside loop: %w", err))
+
+					return
+				}
+
+				if read > 0 && uint32(read) != framesPerPeriod {
+					setReadErr(fmt.Errorf("short read from ReadN: got %d, want %d", read, framesPerPeriod))
+				}
+			}
+		}
+	}()
+
+	// Writer goroutine
+	go func() {
+		defer wg.Done()
+		framesPerPeriod := pcmOut.PeriodSize()
+		bytesPerFrame := alsa.PcmFramesToBytes(pcmOut, 1)
+		bytesPerChannel := bytesPerFrame / config.Channels
+
+		generator := newSineToneGenerator(config, 440, 0)
+		interleavedSource := make([]byte, bytesPerFrame*framesPerPeriod)
+		nonInterleavedSource := make([][]byte, config.Channels)
+		for c := range nonInterleavedSource {
+			nonInterleavedSource[c] = make([]byte, bytesPerChannel*framesPerPeriod)
+		}
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				// Generate and de-interleave one period of data
+				generator.Read(interleavedSource)
+				for f := uint32(0); f < framesPerPeriod; f++ {
+					for c := uint32(0); c < config.Channels; c++ {
+						srcOffset := f*bytesPerFrame + c*bytesPerChannel
+						dstOffset := f * bytesPerChannel
+						copy(nonInterleavedSource[c][dstOffset:dstOffset+bytesPerChannel], interleavedSource[srcOffset:srcOffset+bytesPerChannel])
+					}
+				}
+
+				// Write one period of data
+				written, err := pcmOut.WriteN(nonInterleavedSource, framesPerPeriod)
+				if err != nil {
+					if errors.Is(err, syscall.EBADF) {
+						return
+					}
+
+					setWriteErr(fmt.Errorf("WriteN failed inside loop: %w", err))
+
+					return
+				}
+
+				if uint32(written) != framesPerPeriod {
+					setWriteErr(fmt.Errorf("short write from WriteN: got %d, want %d", written, framesPerPeriod))
+				}
+			}
+		}
+	}()
+
+	// Run the producer-consumer test for a short duration
+	time.Sleep(200 * time.Millisecond)
+	close(done)
+	wg.Wait()
+
+	require.NoError(t, writeErr, "Write goroutine failed")
+	require.NoError(t, readErr, "Read goroutine failed")
 }
 
 func testPcmWriteiTiming(t *testing.T) {
