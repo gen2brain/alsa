@@ -16,8 +16,8 @@ See [utils](cmd/) for usage examples.
 Running the tests requires specific kernel modules to create virtual sound card devices for 
 playback, capture, and mixer control tests without needing physical hardware:
 
- - snd-dummy: Creates a virtual sound card with a mixer, used for testing control functionality.
- - snd-aloop: Creates a loopback sound card, allowing playback data to be captured, which is essential for testing PCM I/O.
+ - `snd-dummy`: Creates a virtual sound card with a mixer, used for testing control functionality.
+ - `snd-aloop`: Creates a loopback sound card, allowing playback data to be captured, which is essential for testing PCM I/O.
 
 You can load them with the following commands:
 ```bash
