@@ -123,6 +123,7 @@ func PcmOpen(card, device uint, flags PcmFlag, config *Config) (*PCM, error) {
 	var info sndPcmInfo
 	if err := ioctl(file.Fd(), SNDRV_PCM_IOCTL_INFO, uintptr(unsafe.Pointer(&info))); err != nil {
 		file.Close()
+
 		return nil, fmt.Errorf("ioctl INFO failed: %w", err)
 	}
 
@@ -298,8 +299,22 @@ func (p *PCM) PeriodTime() time.Duration {
 
 // SetConfig sets the hardware and software parameters for the PCM device.
 // This function should be called before the stream is started. If called on an
-// already configured stream, it will attempt to reconfigure it, which may only succeed if the stream is stopped.
+// already configured stream, it will attempt to reconfigure it, which requires freeing existing hardware parameters.
 func (p *PCM) SetConfig(config *Config) error {
+	// If re-configuring, we must free the existing hardware parameters first.
+	// This is required if the state is SETUP or later (PREPARED, RUNNING, etc.).
+	currentState := p.getState()
+	if currentState != PCM_STATE_OPEN {
+		if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_HW_FREE, 0); err != nil {
+			// If HW_FREE fails (e.g., EBUSY if running), we cannot proceed with HW_PARAMS safely.
+			// The user should ideally call Stop() before SetConfig() if the stream is running.
+			return p.setError(err, "ioctl HW_FREE failed during reconfiguration (stream might be busy)")
+		}
+
+		// Successfully freed HW params, reset state to OPEN conceptually.
+		p.setState(PCM_STATE_OPEN)
+	}
+
 	// If re-configuring, unmap the old data buffer to avoid resource leaks.
 	if p.mmapBuffer != nil {
 		_ = unix.Munmap(p.mmapBuffer)
@@ -961,8 +976,14 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 	// Fast-path: if we already know we're in an error state (e.g., XRUN or SUSPENDED), propagate that immediately.
 	// Some drivers may not set POLLERR, but we still should not report readiness in these states.
 	st := p.getState()
-	if st == PCM_STATE_XRUN || st == PCM_STATE_SUSPENDED || st == PCM_STATE_DISCONNECTED {
+	if st == PCM_STATE_XRUN {
 		return false, syscall.EPIPE
+	}
+	if st == PCM_STATE_SUSPENDED {
+		return false, syscall.ESTRPIPE
+	}
+	if st == PCM_STATE_DISCONNECTED {
+		return false, syscall.ENODEV
 	}
 
 	var events int16
@@ -1857,16 +1878,28 @@ func PcmBytesToFrames(p *PCM, bytes uint32) uint32 {
 
 // paramInit initializes a sndPcmHwParams struct to allow all possible values.
 func paramInit(p *sndPcmHwParams) {
-	for n := 0; n < len(p.Masks); n++ {
+	// Initialize all masks (including reserved) to all-ones.
+	for n := range p.Masks {
 		for i := range p.Masks[n].Bits {
 			p.Masks[n].Bits[i] = ^uint32(0)
 		}
 	}
+	for n := range p.Mres {
+		for i := range p.Mres[n].Bits {
+			p.Mres[n].Bits[i] = ^uint32(0)
+		}
+	}
 
-	for n := 0; n < len(p.Intervals); n++ {
+	// Initialize all intervals (including reserved) to the full range.
+	for n := range p.Intervals {
 		p.Intervals[n].MinVal = 0
 		p.Intervals[n].MaxVal = ^uint32(0)
 		p.Intervals[n].Flags = 0
+	}
+	for n := range p.Ires {
+		p.Ires[n].MinVal = 0
+		p.Ires[n].MaxVal = ^uint32(0)
+		p.Ires[n].Flags = 0
 	}
 
 	p.Rmask = ^uint32(0)
@@ -1925,9 +1958,42 @@ func paramGetInt(p *sndPcmHwParams, param PcmParam) uint32 {
 	return interval.MinVal
 }
 
-// PcmParamsGet queries the hardware parameters for a given PCM device without fully opening it.
-// This is useful for discovering device capabilities.
+// PcmParamsGet queries the hardware parameters for a given PCM device to get its default settings.
+// This function mimics an approach used by some ALSA utilities where a zero-initialized parameter structure is passed
+// to the SNDRV_PCM_IOCTL_HW_PARAMS ioctl. The kernel then fills the structure with the hardware's default or current settings.
 func PcmParamsGet(card, device uint, flags PcmFlag) (*PcmParams, error) {
+	var streamChar byte
+	if (flags & PCM_IN) != 0 {
+		streamChar = 'c'
+	} else {
+		streamChar = 'p'
+	}
+
+	path := fmt.Sprintf("/dev/snd/pcmC%dD%d%c", card, device, streamChar)
+
+	// Use O_NONBLOCK on open to avoid getting stuck
+	file, err := os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open PCM device %s for query: %w", path, err)
+	}
+	defer file.Close()
+
+	hwParams := &sndPcmHwParams{}
+	// Initialize params to full range
+	paramInit(hwParams)
+
+	// HW_PARAMS will fill the struct with default parameters.
+	if err := ioctl(file.Fd(), SNDRV_PCM_IOCTL_HW_PARAMS, uintptr(unsafe.Pointer(hwParams))); err != nil {
+		return nil, fmt.Errorf("ioctl HW_PARAMS failed: %w", err)
+	}
+
+	return &PcmParams{params: hwParams}, nil
+}
+
+// PcmParamsGetRefined queries the hardware parameters for a given PCM device to discover its full range of capabilities.
+// This function initializes the parameters to the widest possible ranges and then uses the SNDRV_PCM_IOCTL_HW_REFINE
+// ioctl to ask the kernel to restrict the ranges to what the hardware actually supports.
+func PcmParamsGetRefined(card, device uint, flags PcmFlag) (*PcmParams, error) {
 	var streamChar byte
 	if (flags & PCM_IN) != 0 {
 		streamChar = 'c'
@@ -1953,11 +2019,6 @@ func PcmParamsGet(card, device uint, flags PcmFlag) (*PcmParams, error) {
 	}
 
 	return &PcmParams{params: hwParams}, nil
-}
-
-// Free releases the resources associated with PcmParams.
-func (pp *PcmParams) Free() {
-	pp.params = nil
 }
 
 // RangeMin returns the minimum value for an interval parameter.

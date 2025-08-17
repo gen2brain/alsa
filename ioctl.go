@@ -88,6 +88,7 @@ var (
 	// PCM IOCTLs
 	SNDRV_PCM_IOCTL_HW_REFINE     uintptr
 	SNDRV_PCM_IOCTL_HW_PARAMS     uintptr
+	SNDRV_PCM_IOCTL_HW_FREE       uintptr
 	SNDRV_PCM_IOCTL_SW_PARAMS     uintptr
 	SNDRV_PCM_IOCTL_INFO          uintptr
 	SNDRV_PCM_IOCTL_PAUSE         uintptr
@@ -123,6 +124,7 @@ func init() {
 	// PCM IOCTLs ('A' for ALSA)
 	SNDRV_PCM_IOCTL_HW_REFINE = iowr('A', 0x10, unsafe.Sizeof(sndPcmHwParams{}))
 	SNDRV_PCM_IOCTL_HW_PARAMS = iowr('A', 0x11, unsafe.Sizeof(sndPcmHwParams{}))
+	SNDRV_PCM_IOCTL_HW_FREE = io('A', 0x12)
 	SNDRV_PCM_IOCTL_SW_PARAMS = iowr('A', 0x13, unsafe.Sizeof(sndPcmSwParams{}))
 	SNDRV_PCM_IOCTL_INFO = ior('A', 0x01, unsafe.Sizeof(sndPcmInfo{}))
 
