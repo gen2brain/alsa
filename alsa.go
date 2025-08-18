@@ -129,9 +129,9 @@ const (
 )
 
 const (
-	SNDRV_PCM_SYNC_PTR_APPL      = 1 << 0
+	SNDRV_PCM_SYNC_PTR_HWSYNC    = 1 << 0
+	SNDRV_PCM_SYNC_PTR_APPL      = 1 << 1
 	SNDRV_PCM_SYNC_PTR_AVAIL_MIN = 1 << 2
-	SNDRV_PCM_SYNC_PTR_HWSYNC    = 1 << 1
 )
 
 // PcmAccess defines the type of PCM access.
