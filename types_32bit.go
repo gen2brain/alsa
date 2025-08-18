@@ -1,4 +1,4 @@
-//go:build linux && (386 || arm)
+//go:build linux && (386 || arm || mips || mipsle)
 
 package alsa
 
