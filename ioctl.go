@@ -21,7 +21,6 @@ func io(typ, nr uintptr) uintptr {
 		_IOC_NRBITS    = 8
 		_IOC_TYPEBITS  = 8
 		_IOC_SIZEBITS  = 14
-		_IOC_DIRBITS   = 2
 		_IOC_NRSHIFT   = 0
 		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
 		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
@@ -38,7 +37,6 @@ func iow(typ, nr, size uintptr) uintptr {
 		_IOC_NRBITS    = 8
 		_IOC_TYPEBITS  = 8
 		_IOC_SIZEBITS  = 14
-		_IOC_DIRBITS   = 2
 		_IOC_NRSHIFT   = 0
 		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
 		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
@@ -55,7 +53,6 @@ func ior(typ, nr, size uintptr) uintptr {
 		_IOC_NRBITS    = 8
 		_IOC_TYPEBITS  = 8
 		_IOC_SIZEBITS  = 14
-		_IOC_DIRBITS   = 2
 		_IOC_NRSHIFT   = 0
 		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
 		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
@@ -72,7 +69,6 @@ func iowr(typ, nr, size uintptr) uintptr {
 		_IOC_NRBITS    = 8
 		_IOC_TYPEBITS  = 8
 		_IOC_SIZEBITS  = 14
-		_IOC_DIRBITS   = 2
 		_IOC_NRSHIFT   = 0
 		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
 		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
