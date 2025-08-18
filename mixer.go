@@ -98,7 +98,7 @@ func (m *Mixer) NumCtlsByName(name string) int {
 	return len(m.ctlMap[name])
 }
 
-// Ctl returns a mixer control by its numeric ID (`numid`).
+// Ctl returns a mixer control by its numeric ID.
 func (m *Mixer) Ctl(id uint32) (*MixerCtl, error) {
 	if m == nil {
 		return nil, fmt.Errorf("mixer is nil")
@@ -317,8 +317,7 @@ func (m *Mixer) ReadEvent() (*MixerEvent, error) {
 
 	event := &MixerEvent{Type: MixerEventType(ev.Elem.Mask)}
 
-	// The mask indicates what kind of event it is. For VALUE, INFO, ADD, and REMOVE,
-	// the event data contains the element ID.
+	// The mask indicates what kind of event it is. For VALUE, INFO, ADD, and REMOVE, the event data contains the element ID.
 	const eventMaskWithID = SNDRV_CTL_EVENT_MASK_VALUE | SNDRV_CTL_EVENT_MASK_INFO | SNDRV_CTL_EVENT_MASK_ADD | SNDRV_CTL_EVENT_MASK_REMOVE
 
 	if (event.Type & eventMaskWithID) != 0 {
@@ -923,7 +922,6 @@ func (ctl *MixerCtl) NumEnums() (uint32, error) {
 		return 0, fmt.Errorf("not an enumerated control")
 	}
 
-	// Cast the value union to our enumerated struct representation to read the item count.
 	enumInfo := (*sndCtlEnum)(unsafe.Pointer(&ctl.info.Value[0]))
 
 	return enumInfo.Items, nil
@@ -1232,8 +1230,7 @@ func (ctl *MixerCtl) String() string {
 		}
 
 	case MIXER_CTL_TYPE_BYTE:
-		// Reading byte arrays might not always be useful to display,
-		// but we can indicate that it's a byte control.
+		// Reading byte arrays might not always be useful to display, but we can indicate that it's a byte control.
 		b.WriteString(fmt.Sprintf("Note          : Use .Array() to read byte data.\n"))
 	}
 

@@ -145,7 +145,7 @@ func testMixerInfo(t *testing.T, m *alsa.Mixer) {
 	name := m.Name()
 	assert.NotEmpty(t, name, "mixer.Name() should return a non-empty string")
 
-	// Test NumberOfControls
+	// Test NumCtls
 	numCtls := m.NumCtls()
 
 	t.Logf("Card '%s' has %d controls.", name, numCtls)
@@ -580,6 +580,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	for _, s := range allEnums {
 		if s != originalStr {
 			targetStr = s
+
 			break
 		}
 	}
@@ -837,7 +838,7 @@ func testMixerCtlByNameAndDevice(t *testing.T, m *alsa.Mixer) {
 		firstCtl := m.Ctls[0]
 		name := firstCtl.Name()
 
-		// Find a device number that is NOT associated with this control name
+		// Find a device number NOT associated with this control name
 		nonExistentDevice := uint32(9999) // Start with a high number
 		isUnique := false
 
