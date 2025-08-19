@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -25,6 +26,7 @@ func main() {
 		rate        int
 		formatStr   string
 		duration    int
+		mmap        bool
 	)
 
 	flag.IntVar(&card, "card", 0, "The card to capture from")
@@ -35,11 +37,12 @@ func main() {
 	flag.IntVar(&rate, "rate", 48000, "The sample rate in Hz")
 	flag.StringVar(&formatStr, "format", "s16", "The sample format (s16, s24, s32)")
 	flag.IntVar(&duration, "duration", 5, "The duration of the capture in seconds")
+	flag.BoolVar(&mmap, "mmap", false, "Use memory-mapped (MMAP) I/O")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] <output-wav-file>\n", os.Args[0])
 		fmt.Fprintln(os.Stderr, "\nOptions:")
-		for _, name := range []string{"card", "device", "period-size", "period-count", "channels", "rate", "format", "duration"} {
+		for _, name := range []string{"card", "device", "period-size", "period-count", "channels", "rate", "format", "duration", "mmap"} {
 			f := flag.Lookup(name)
 			if f != nil {
 				fmt.Fprintf(os.Stderr, "  --%s\n    \t%v (default %q)\n", f.Name, f.Usage, f.DefValue)
@@ -76,9 +79,15 @@ func main() {
 	fmt.Printf("Configuration: %d channels, %d Hz, %s\n", config.Channels, config.Rate, alsa.PcmParamFormatNames[config.Format])
 	fmt.Printf("Period size: %d, Period count: %d\n", config.PeriodSize, config.PeriodCount)
 	fmt.Printf("Capture duration: %d seconds\n", duration)
+	fmt.Printf("Mode: %s\n", map[bool]string{false: "Standard I/O", true: "MMAP"}[mmap])
 
 	// Open the ALSA PCM device for capture (PCM_IN).
-	pcm, err := alsa.PcmOpen(uint(card), uint(device), alsa.PCM_IN, &config)
+	flags := alsa.PCM_IN
+	if mmap {
+		flags |= alsa.PCM_MMAP
+	}
+
+	pcm, err := alsa.PcmOpen(uint(card), uint(device), flags, &config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening ALSA device: %v\n", err)
 		os.Exit(1)
@@ -86,9 +95,18 @@ func main() {
 	defer pcm.Close()
 
 	// A stream must be in the PREPARED state before it can be read from.
+	// This is especially critical for MMAP streams.
 	if err := pcm.Prepare(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error preparing ALSA device: %v\n", err)
 		os.Exit(1)
+	}
+
+	// For capture, the stream must be explicitly started to begin receiving data.
+	if mmap {
+		if err := pcm.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting MMAP stream: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Create the output WAV file.
@@ -130,20 +148,41 @@ func main() {
 			fmt.Println("\nCapture interrupted by user.")
 			keepRunning = false
 		default:
+			var read int
+			var readErr error
+
 			// Read interleaved audio data from the ALSA device.
-			read, err := pcm.ReadI(buffer, chunkFrames)
-			if err != nil {
-				// The library's ReadI function attempts to recover from overruns (EPIPE),
+			if mmap {
+				read, readErr = pcm.MmapRead(buffer)
+			} else {
+				// For standard I/O ReadI returns frames, so we convert to bytes.
+				framesRead, err := pcm.ReadI(buffer, chunkFrames)
+				if err == nil {
+					read = int(alsa.PcmFramesToBytes(pcm, uint32(framesRead)))
+				}
+
+				readErr = err
+			}
+
+			if readErr != nil {
+				// The library's I/O functions attempt to recover from overruns (EPIPE),
 				// so if we get an error here, it's likely unrecoverable.
-				fmt.Fprintf(os.Stderr, "Error reading from ALSA device: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Error reading from ALSA device: %v\n", readErr)
+				if errors.Is(readErr, syscall.EPIPE) {
+					fmt.Fprintln(os.Stderr, "Got EPIPE (overrun), and recovery failed.")
+				}
+
 				keepRunning = false
 
 				continue
 			}
 
 			if read > 0 {
+				bytesRead := uint32(read)
+				framesReadInChunk := alsa.PcmBytesToFrames(pcm, bytesRead)
+
 				// Convert the raw byte buffer to an audio.IntBuffer for the encoder.
-				intBuffer, err := bytesToIntBuffer(buffer[:alsa.PcmFramesToBytes(pcm, uint32(read))], pcm.Format(), int(pcm.Channels()))
+				intBuffer, err := bytesToIntBuffer(buffer[:bytesRead], pcm.Format(), int(pcm.Channels()))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Error converting buffer: %v\n", err)
 
@@ -157,9 +196,14 @@ func main() {
 					break
 				}
 
-				framesCaptured += uint32(read)
+				framesCaptured += framesReadInChunk
 			}
 		}
+	}
+
+	// For MMAP, explicitly stop the stream before closing.
+	if mmap {
+		pcm.Stop()
 	}
 
 	durationCaptured := time.Duration(float64(framesCaptured)/float64(config.Rate)) * time.Second
