@@ -9,11 +9,11 @@ allowing for raw audio (PCM) playback and capture, and control over mixer elemen
 
 ### Usage
 
-See [utils](cmd/) for usage examples.
+See [utils](cmd/) and tests for usage examples.
 
 ### Notes
 
-This library does not support the ALSA plugin architecture.
+This library does not support the ALSA plugin architecture and will only open direct hardware devices.
 
 No `dmix` plugin that enables multiple applications to share a single audio output device.
 Additionally, no `plug` plugin that typically handles automatic conversions for sample rate and format (e.g., `S16_LE` to `S32_LE`).
