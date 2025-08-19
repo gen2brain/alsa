@@ -9,13 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// MixerCtl represents an individual mixer control handle.
-type MixerCtl struct {
-	mixer *Mixer
-	info  sndCtlElemInfo
-	ename []string // Cache for enumerated item names
-}
-
 // Mixer represents an open ALSA mixer device handle.
 type Mixer struct {
 	file     *os.File

@@ -7,6 +7,13 @@ import (
 	"unsafe"
 )
 
+// MixerCtl represents an individual mixer control handle.
+type MixerCtl struct {
+	mixer *Mixer
+	info  sndCtlElemInfo
+	ename []string // Cache for enumerated item names
+}
+
 // Name returns the name of the control.
 func (ctl *MixerCtl) Name() string {
 	if ctl == nil {
