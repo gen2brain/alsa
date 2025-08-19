@@ -1757,16 +1757,26 @@ func (p *PCM) MmapCommit(frames uint32) error {
 		atomic.StoreUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr)), uint32(newApplPtr))
 	}
 
-	// After updating the application pointer, we must notify the kernel via SYNC_PTR.
-	// This tells the kernel to re-read the appl_ptr from the control structure and update its internal state.
-	if err := p.ioctlSync(SNDRV_PCM_SYNC_PTR_APPL); err != nil {
-		// The ioctl failed, which often indicates an XRUN. Update our state and propagate the error.
+	// After updating the application pointer, we must notify the kernel and get the latest state back.
+	// HWSYNC is crucial here because it forces the kernel to update the status part of our syncPtr struct,
+	// allowing us to see if the stream auto-started as a result of this commit.
+	if err := p.ioctlSync(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_HWSYNC); err != nil {
+		// The ioctl failed, which often indicates an XRUN or other state change.
+		// Update our state from the error code and propagate the error.
 		if errors.Is(err, syscall.EPIPE) {
 			p.setState(PCM_STATE_XRUN)
+		} else if errors.Is(err, unix.EBADFD) {
+			p.setState(PCM_STATE_SETUP)
+		} else if errors.Is(err, syscall.ESTRPIPE) {
+			p.setState(PCM_STATE_SUSPENDED)
 		}
 
 		return err
 	}
+
+	// After a successful sync, update our cached state from the kernel's response.
+	// This is critical for detecting if the kernel auto-started the stream.
+	p.setState(p.syncPtr.S.State)
 
 	return nil
 }
