@@ -389,10 +389,9 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 		return
 	}
 
-	// For mmap streams, sync the hardware pointer to ensure the values we read are up to date.
-	// We use SYNC_PTR instead of HWSYNC because it's synchronous and more reliable across different drivers,
-	// preventing race conditions where we might read stale pointers after HWSYNC returns.
-	if syncErr := p.ioctlSync(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_HWSYNC); syncErr != nil {
+	// For mmap streams, sync the hardware pointer and kernel state.
+	// We only need to get updates from the kernel (HWSYNC), not push our appl_ptr. Pushing appl_ptr is the job of MmapCommit.
+	if syncErr := p.ioctlSync(SNDRV_PCM_SYNC_PTR_HWSYNC); syncErr != nil {
 		// If the ioctl fails, update our state from the error code and propagate the error.
 		if errors.Is(syncErr, syscall.EPIPE) {
 			p.setState(PCM_STATE_XRUN)
