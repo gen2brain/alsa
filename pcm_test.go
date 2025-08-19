@@ -501,7 +501,6 @@ func testPcmGetters(t *testing.T) {
 	require.Equal(t, defaultConfig.Rate, pcm.Rate())
 	require.Equal(t, defaultConfig.Format, pcm.Format())
 	require.Equal(t, defaultConfig.PeriodSize*defaultConfig.PeriodCount, pcm.BufferSize())
-	require.Equal(t, "", pcm.Error())
 
 	// Test PeriodTime calculation
 	expectedNs := (1e9 * float64(defaultConfig.PeriodSize)) / float64(defaultConfig.Rate)
