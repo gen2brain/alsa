@@ -13,24 +13,30 @@ type SndPcmSframesT = int64
 // clong is a type alias for the C `long` type on 64-bit systems.
 type clong = int64
 
+// timespec matches the struct timespec.
+type timespec struct {
+	Sec  int64
+	Nsec int64
+}
+
 // sndPcmMmapStatus contains the status of an MMAP PCM stream.
 // On 64-bit systems, padding is required before AudioTstamp for alignment.
 type sndPcmMmapStatus struct {
 	State          PcmState
 	Pad1           int32
 	HwPtr          SndPcmUframesT
-	Tstamp         kernelTimespec
+	Tstamp         timespec
 	SuspendedState int32 // PcmState
 	_              [4]byte
-	AudioTstamp    kernelTimespec
+	AudioTstamp    timespec
 }
 
 // sndPcmStatus contains the current status of a PCM stream.
 type sndPcmStatus struct {
 	State               PcmState
 	_                   [4]byte // Padding for timespec alignment
-	TriggerTstamp       kernelTimespec
-	Tstamp              kernelTimespec
+	TriggerTstamp       timespec
+	Tstamp              timespec
 	ApplPtr             SndPcmUframesT
 	HwPtr               SndPcmUframesT
 	Delay               SndPcmSframesT
@@ -39,20 +45,10 @@ type sndPcmStatus struct {
 	Overrange           SndPcmUframesT
 	SuspendedState      PcmState
 	AudioTstampData     uint32
-	AudioTstamp         kernelTimespec
-	DriverTstamp        kernelTimespec
+	AudioTstamp         timespec
+	DriverTstamp        timespec
 	AudioTstampAccuracy uint32
-	_                   [20]byte // Reserved
-}
-
-// sndCtlElemValue holds the value of a control element.
-type sndCtlElemValue struct {
-	Id sndCtlElemId
-	// This represents the `unsigned int indirect:1;` field from the C struct.
-	_ [8]byte
-	// The value union on 64-bit systems is 1024 bytes (long value[128] = 8*128 = 1024)
-	Value    [1024]byte
-	Reserved [128]byte
+	Reserved            [20]byte
 }
 
 // sndPcmSyncPtr is used to synchronize hardware and application pointers via ioctl.
@@ -61,12 +57,12 @@ type sndPcmSyncPtr struct {
 	Flags uint32
 	_     [4]byte // Padding to align the unions
 	S     struct {
-		sndPcmMmapStatus
-		_ [8]byte // Padding to make the union 64 bytes
+		sndPcmMmapStatus         // sndPcmMmapStatus is 56 bytes
+		_                [8]byte // Padding to make the union 64 bytes
 	}
 	C struct {
-		sndPcmMmapControl
-		_ [48]byte // Padding to make the union 64 bytes
+		sndPcmMmapControl          // 16 bytes
+		_                 [48]byte // Padding to make the union 64 bytes
 	}
 }
 
@@ -85,4 +81,14 @@ type sndPcmSwParams struct {
 	SilenceSize      SndPcmUframesT
 	Boundary         SndPcmUframesT
 	Reserved         [64]byte
+}
+
+// sndCtlElemValue holds the value of a control element.
+type sndCtlElemValue struct {
+	Id sndCtlElemId
+	// This represents the `unsigned int indirect:1;` field from the C struct.
+	_ [8]byte
+	// The value union on 64-bit systems is 1024 bytes (long value[128] = 8*128 = 1024)
+	Value    [1024]byte
+	Reserved [128]byte
 }

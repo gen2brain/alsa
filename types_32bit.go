@@ -13,24 +13,27 @@ type SndPcmSframesT = int32
 // clong is a type alias for the C `long` type on 32-bit systems.
 type clong = int32
 
+// timespec matches the struct timespec.
+type timespec struct {
+	Sec  int32
+	Nsec int32
+}
+
 // sndPcmMmapStatus contains the status of an MMAP PCM stream.
 type sndPcmMmapStatus struct {
 	State          PcmState
 	Pad1           int32
 	HwPtr          SndPcmUframesT
-	_              [4]byte
-	Tstamp         kernelTimespec
-	SuspendedState int32 // PcmState
-	_              [4]byte
-	AudioTstamp    kernelTimespec
+	Tstamp         timespec
+	SuspendedState PcmState
+	AudioTstamp    timespec
 }
 
 // sndPcmStatus contains the current status of a PCM stream.
 type sndPcmStatus struct {
 	State               PcmState
-	_                   [4]byte // Padding for timespec alignment
-	TriggerTstamp       kernelTimespec
-	Tstamp              kernelTimespec
+	TriggerTstamp       timespec
+	Tstamp              timespec
 	ApplPtr             SndPcmUframesT
 	HwPtr               SndPcmUframesT
 	Delay               SndPcmSframesT
@@ -39,37 +42,23 @@ type sndPcmStatus struct {
 	Overrange           SndPcmUframesT
 	SuspendedState      PcmState
 	AudioTstampData     uint32
-	AudioTstamp         kernelTimespec
-	DriverTstamp        kernelTimespec
+	AudioTstamp         timespec
+	DriverTstamp        timespec
 	AudioTstampAccuracy uint32
-	_                   [20]byte // Reserved
-}
-
-// sndCtlElemValue holds the value of a control element.
-type sndCtlElemValue struct {
-	Id sndCtlElemId
-	// This represents the `unsigned int indirect:1;` field from the C struct.
-	// On 32-bit architectures, the following `Value` union is only 4-byte aligned,
-	// so no extra padding is needed after this 4-byte field.
-	_ [4]byte
-	// Represents a C union. The largest member on 32-bit is 'long long Value[64]' (512 bytes).
-	Value    [512]byte
-	Reserved [128]byte
+	Reserved            [36]byte
 }
 
 // sndPcmSyncPtr is used to synchronize hardware and application pointers via ioctl.
 // The field order must match the C struct exactly. This definition is for 32-bit systems.
 type sndPcmSyncPtr struct {
 	Flags uint32
-	// Padding (4 bytes) required to align the unions to 8 bytes (due to Timespec inside status).
-	_ [4]byte
-	S struct {
-		sndPcmMmapStatus
-		_ [8]byte // Padding to make the union 64 bytes
+	S     struct {
+		sndPcmMmapStatus          // sndPcmMmapStatus is 32 bytes
+		_                [32]byte // Padding to make the union 64 bytes
 	}
 	C struct {
-		sndPcmMmapControl
-		_ [56]byte // Padding to make the union 64 bytes
+		sndPcmMmapControl          // 8 bytes
+		_                 [56]byte // Padding to make the union 64 bytes
 	}
 }
 
@@ -88,4 +77,16 @@ type sndPcmSwParams struct {
 	SilenceSize      SndPcmUframesT
 	Boundary         SndPcmUframesT
 	Reserved         [64]byte
+}
+
+// sndCtlElemValue holds the value of a control element.
+type sndCtlElemValue struct {
+	Id sndCtlElemId
+	// This represents the `unsigned int indirect:1;` field from the C struct.
+	// On 32-bit architectures, the following `Value` union is only 4-byte aligned,
+	// so no extra padding is needed after this 4-byte field.
+	_ [4]byte
+	// Represents a C union. The largest member on 32-bit is 'long long Value[64]' (512 bytes).
+	Value    [512]byte
+	Reserved [128]byte
 }

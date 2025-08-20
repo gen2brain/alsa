@@ -1,12 +1,5 @@
 package alsa
 
-// kernelTimespec matches the Linux kernel's struct __kernel_timespec,
-// which uses 64-bit fields for time on all architectures (since Y2038 fixes).
-type kernelTimespec struct {
-	Sec  int64
-	Nsec int64
-}
-
 // sndXferi is for interleaved read/write operations.
 type sndXferi struct {
 	Result int     // Corresponds to C ssize_t
