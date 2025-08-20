@@ -573,7 +573,7 @@ func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
 	// For playback, it's writable space. For capture, it's readable data.
 	availFrames = uint32(status.Avail)
 	ts := status.Tstamp
-	t = time.Unix(ts.Sec, ts.Nsec)
+	t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
 
 	return
 }
@@ -605,7 +605,7 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 
 	// The snd-aloop driver may not provide a valid timestamp, so we don't treat a zero value as an error.
 	ts := status.Tstamp
-	tstamp = time.Unix(ts.Sec, ts.Nsec)
+	tstamp = time.Unix(int64(ts.Sec), int64(ts.Nsec))
 	hwPtr = status.HwPtr
 
 	return
