@@ -84,16 +84,12 @@ const (
 	// This is an optimization for MMAP streams that can reduce CPU usage.
 	// When used, Wait() will use a calculated timeout instead of blocking indefinitely.
 	PCM_NOIRQ PcmFlag = 0x00000008
-	// PCM_NONINTERLEAVED specifies that the stream will use non-interleaved I/O.
-	// This applies only to standard read/write, not MMAP.
-	PCM_NONINTERLEAVED PcmFlag = 0x00000020
 )
 
 // MixerCtlType defines the value type of mixer control.
 type MixerCtlType int32
 
 const (
-	SNDRV_CTL_ELEM_TYPE_NONE       MixerCtlType = 0
 	SNDRV_CTL_ELEM_TYPE_BOOLEAN    MixerCtlType = 1
 	SNDRV_CTL_ELEM_TYPE_INTEGER    MixerCtlType = 2
 	SNDRV_CTL_ELEM_TYPE_ENUMERATED MixerCtlType = 3
