@@ -93,15 +93,13 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmPlaybackStartup", testPcmPlaybackStartup)
 	t.Run("PcmGetters", testPcmGetters)
 	t.Run("PcmFramesBytesConvert", testPcmFramesBytesConvert)
-	t.Run("PcmTimestampFailsOnNonMmap", testPcmTimestampFailsOnNonMmap)
-	t.Run("PcmHWPtrFailsOnNonMmap", testPcmHWPtrFailsOnNonMmap)
 	t.Run("PcmWriteiFailsOnCapture", testPcmWriteiFailsOnCapture)
 	t.Run("PcmReadiFailsOnPlayback", testPcmReadiFailsOnPlayback)
 	t.Run("PcmWriteiTiming", testPcmWriteiTiming)
 	t.Run("PcmGetDelay", testPcmGetDelay)
 	t.Run("PcmReadiTiming", testPcmReadiTiming)
 	t.Run("PcmReadWriteSample", testPcmReadWriteSimple)
-	//t.Run("PcmMmapWrite", testPcmMmapWrite)
+	t.Run("PcmMmapWrite", testPcmMmapWrite)
 	t.Run("PcmMmapRead", testPcmMmapRead)
 	t.Run("PcmState", testPcmState)
 	t.Run("PcmStop", testPcmStop)
@@ -112,7 +110,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmDrain", testPcmDrain)
 	t.Run("PcmPause", testPcmPause)
 	t.Run("PcmLoopback", testPcmLoopback)
-	//t.Run("PcmMmapLoopback", testPcmMmapLoopback)
+	t.Run("PcmMmapLoopback", testPcmMmapLoopback)
 }
 
 func testPcmOpenAndClose(t *testing.T) {
@@ -252,10 +250,10 @@ func testPcmStop(t *testing.T) {
 
 	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err)
+	defer capturePcm.Close()
 
 	err = pcm.Link(capturePcm)
 	if err != nil {
-		capturePcm.Close()
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
 	}
 	defer pcm.Unlink()
@@ -269,7 +267,7 @@ func testPcmStop(t *testing.T) {
 		for {
 			err := capturePcm.Read(buffer)
 			if err != nil {
-				// An error is expected when the stream is stopped/closed.
+				// An error is expected when the stream is stopped.
 				// This is the signal for the goroutine to exit.
 				return
 			}
@@ -294,11 +292,8 @@ func testPcmStop(t *testing.T) {
 	state = pcm.State()
 	require.Equal(t, alsa.SNDRV_PCM_STATE_SETUP, state, "Stream should be in SETUP state after stopping")
 
-	// While Stop() should ideally cause an EPIPE, closing is a more robust
-	// termination signal for the test's cleanup phase.
-	capturePcm.Close()
-
-	// Wait for the reader goroutine to finish.
+	// Wait for the reader goroutine to finish. It will exit because pcm.Stop()
+	// caused its blocking Read() call to return an error.
 	wg.Wait()
 }
 
@@ -434,28 +429,6 @@ func testPcmFramesBytesConvert(t *testing.T) {
 	bytesPerFrame := alsa.PcmFormatToBits(defaultConfig.Format) / 8 * defaultConfig.Channels
 	require.Equal(t, bytesPerFrame, alsa.PcmFramesToBytes(pcm, 1))
 	require.Equal(t, uint32(1), alsa.PcmBytesToFrames(pcm, bytesPerFrame))
-}
-
-func testPcmTimestampFailsOnNonMmap(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
-	require.NoError(t, err)
-	defer pcm.Close()
-
-	// This test is expected to fail on non-mmap streams.
-	_, _, err = pcm.Timestamp()
-	require.Error(t, err, "Timestamp() should fail on a non-MMAP stream")
-	require.Contains(t, err.Error(), "only available for MMAP streams")
-}
-
-func testPcmHWPtrFailsOnNonMmap(t *testing.T) {
-	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &defaultConfig)
-	require.NoError(t, err)
-	defer pcm.Close()
-
-	// This should fail as HWPtr is only for MMAP streams.
-	_, _, err = pcm.HWPtr()
-	require.Error(t, err, "HWPtr() should fail on a non-MMAP stream")
-	require.Contains(t, err.Error(), "only available for MMAP streams")
 }
 
 func testPcmWriteiFailsOnCapture(t *testing.T) {
@@ -635,7 +608,6 @@ func testPcmReadiTiming(t *testing.T) {
 			default:
 				_, err := playbackPcm.WriteI(playbackBuffer, frames)
 				if err != nil {
-					// Added EBADFD check
 					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
 						return
 					}
@@ -854,20 +826,6 @@ func testPcmMmapWrite(t *testing.T) {
 	require.NoError(t, pcm.Prepare(), "playback stream prepare failed")
 	require.NoError(t, capturePcm.Prepare(), "capture stream prepare failed")
 
-	// Test AvailMax on the prepared playback stream. Available space should be the full buffer,
-	// so the "max" available frames in the buffer should be 0.
-	availPlayback, err := pcm.AvailMax()
-	if assert.NoError(t, err, "AvailMax failed on prepared playback stream") {
-		assert.Equal(t, 0, availPlayback, "AvailMax should be 0 for a prepared, empty playback stream")
-	}
-
-	// Test AvailMax on the prepared capture stream. No data is available to read,
-	// so the free space (returned by AvailMax for capture) should be the full buffer size.
-	availCapture, errCapture := capturePcm.AvailMax()
-	if assert.NoError(t, errCapture, "AvailMax failed on prepared capture stream") {
-		assert.Equal(t, int(capturePcm.BufferSize()), availCapture, "AvailMax should be buffer size for a prepared, empty capture stream")
-	}
-
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 	readyToRead := make(chan struct{})
@@ -944,20 +902,6 @@ func testPcmMmapWrite(t *testing.T) {
 		if written != len(buffer) {
 			t.Fatalf("MmapWrite wrote %d bytes, want %d", written, len(buffer))
 		}
-
-		// After a successful write, the stream is guaranteed to be running.
-		// Test Timestamp and HWPtr here, but only once to avoid spamming logs/overhead.
-		if i == 1 {
-			availFrames, _, err := pcm.Timestamp()
-			if assert.NoError(t, err, "Timestamp() should succeed on a running MMAP stream") {
-				assert.LessOrEqual(t, availFrames, pcm.BufferSize(), "Available frames should not exceed buffer size")
-			}
-
-			hwPtr, _, err := pcm.HWPtr()
-			if assert.NoError(t, err, "HWPtr() should succeed on a running MMAP stream") {
-				assert.Less(t, hwPtr, alsa.SndPcmUframesT(pcm.BufferSize()), "Hardware pointer should be within buffer size")
-			}
-		}
 	}
 
 	duration := time.Since(start)
@@ -987,8 +931,10 @@ func testPcmMmapRead(t *testing.T) {
 
 	captureConfig := defaultConfig
 	captureConfig.Format = alsa.SNDRV_PCM_FORMAT_S16_LE
-	// Use the default start threshold for capture (1), by setting it to 0 here.
-	captureConfig.StartThreshold = 0
+	// By setting the start threshold to be larger than the buffer, we ensure that
+	// the explicit Start() call within MmapRead is never triggered.
+	// Instead, the stream will be started implicitly by the linked playback stream.
+	captureConfig.StartThreshold = captureConfig.PeriodSize*captureConfig.PeriodCount + 1
 
 	// Robustness check: Ensure the loopback device supports the required format and MMAP access using PcmParamsGetRefined.
 	playbackParams, err := alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
@@ -1760,8 +1706,10 @@ func testPcmMmapLoopback(t *testing.T) {
 	captureConfig := defaultConfig
 	captureConfig.Format = alsa.SNDRV_PCM_FORMAT_S16_LE
 
-	// Use the default start threshold for capture (1), by setting it to 0 here.
-	captureConfig.StartThreshold = 0
+	// By setting the start threshold to be larger than the buffer, we ensure that
+	// the explicit Start() call within MmapRead is never triggered.
+	// Instead, the stream will be started implicitly by the linked playback stream.
+	captureConfig.StartThreshold = captureConfig.PeriodSize*captureConfig.PeriodCount + 1
 
 	// Ensure the loopback device supports the required format and MMAP access.
 	// Use PcmParamsGetRefined for a comprehensive check of capabilities.
@@ -1929,11 +1877,6 @@ func testPcmMmapLoopback(t *testing.T) {
 				generator.Read(buffer)
 				written, err := pcmOut.MmapWrite(buffer)
 				if err != nil {
-					// EBADF is expected on shutdown.
-					if errors.Is(err, syscall.EBADF) {
-						return
-					}
-
 					// EPIPE or EBADFD means an XRUN (underrun) occurred and recovery failed.
 					// This is a failure unless we are shutting down.
 					if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {

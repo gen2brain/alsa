@@ -11,8 +11,6 @@ import (
 
 // WriteI writes interleaved audio data to a playback PCM device using an ioctl call.
 // The provided `data` argument must be a slice of a supported numeric type (e.g., []int16, []float32).
-// It automatically prepares and starts the stream, recovers from underruns,
-// and loops until all requested frames have been written or an unrecoverable error occurs.
 // Returns the number of frames actually written.
 func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) != 0 {
@@ -36,20 +34,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	defer runtime.KeepAlive(data)
 
 	s := p.State()
-	if s == SNDRV_PCM_STATE_XRUN {
-		if (p.flags & PCM_NORESTART) != 0 {
-			// If NORESTART is set, we must return EPIPE immediately.
-			return 0, syscall.EPIPE
-		}
-
-		// If auto-restart is enabled, attempt recovery now. We use ESTRPIPE as the triggering error.
-		if err := p.xrunRecover(syscall.ESTRPIPE); err != nil {
-			return 0, err
-		}
-
-		// Recovery successful, state is now PREPARED.
-	} else if s != SNDRV_PCM_STATE_RUNNING && s != SNDRV_PCM_STATE_PREPARED {
-		// Handle initial preparation if state is OPEN or SETUP.
+	if s == SNDRV_PCM_STATE_SETUP {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
@@ -77,32 +62,19 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		}
 
 		if err != nil {
-			// For non-blocking mode, EAGAIN means the buffer is full.
-			// Stop and return the frames written so far.
-			if errors.Is(err, syscall.EAGAIN) && (p.flags&PCM_NONBLOCK) != 0 {
-				break
-			}
-
-			// EINTR is a temporary interruption; just retry the operation.
-			if errors.Is(err, syscall.EINTR) {
-				continue
-			}
-
-			// EBADF is a terminal condition for this I/O operation, often indicating
-			// the stream was closed by another thread. Propagate it to the caller.
-			if errors.Is(err, syscall.EBADF) {
-				return int(framesWritten), err
-			}
-
 			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
 			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
 				if errRec := p.xrunRecover(err); errRec != nil {
-					// Recovery failed, return what we've written and the error.
 					return int(framesWritten), errRec
 				}
 
 				// Recovery succeeded, continue the loop to retry writing.
 				continue
+			}
+
+			// For non-blocking mode, EAGAIN means the buffer is full.
+			if errors.Is(err, syscall.EAGAIN) && (p.flags&PCM_NONBLOCK) != 0 {
+				break
 			}
 
 			return int(framesWritten), fmt.Errorf("ioctl WRITEI_FRAMES failed: %w", err)
@@ -114,10 +86,8 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 
 // ReadI reads interleaved audio data from a capture PCM device using an ioctl call.
 // The provided `buffer` must be a slice of a supported numeric type (e.g., []int16, []float32).
-// It automatically starts the stream, recovers from overruns (EPIPE),
-// and loops until the buffer is filled with the requested number of frames or an unrecoverable error occurs.
 // Returns the number of frames actually read.
-func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
+func (p *PCM) ReadI(data any, frames uint32) (int, error) {
 	if (p.flags & PCM_IN) == 0 {
 		return 0, fmt.Errorf("cannot read from a playback device")
 	}
@@ -126,7 +96,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		return 0, fmt.Errorf("use MmapRead for mmap devices")
 	}
 
-	byteLen, err := checkSlice(buffer)
+	byteLen, err := checkSlice(data)
 	if err != nil {
 		return 0, fmt.Errorf("invalid buffer type for ReadI: %w", err)
 	}
@@ -140,31 +110,18 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		return 0, nil
 	}
 
-	defer runtime.KeepAlive(buffer)
+	defer runtime.KeepAlive(data)
 
 	s := p.State()
-	if s == SNDRV_PCM_STATE_XRUN {
-		if (p.flags & PCM_NORESTART) != 0 {
-			return 0, syscall.EPIPE
-		}
-
-		// If auto-restart is enabled, attempt recovery now. We use ESTRPIPE as the triggering error.
-		// For capture, xrunRecover will call Start() if non-MMAP.
-		if err := p.xrunRecover(syscall.ESTRPIPE); err != nil {
-			return 0, err
-		}
-	} else if s != SNDRV_PCM_STATE_RUNNING && s != SNDRV_PCM_STATE_PREPARED {
-		// Handle initial preparation if state is OPEN or SETUP.
+	if s == SNDRV_PCM_STATE_SETUP {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
-
-		s = SNDRV_PCM_STATE_PREPARED
 	}
 
 	bufferPtr := uintptr(0)
-	if reflect.ValueOf(buffer).Len() > 0 {
-		bufferPtr = reflect.ValueOf(buffer).Index(0).Addr().Pointer()
+	if reflect.ValueOf(data).Len() > 0 {
+		bufferPtr = reflect.ValueOf(data).Index(0).Addr().Pointer()
 	}
 
 	framesRead := uint32(0)
@@ -184,23 +141,6 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		}
 
 		if err != nil {
-			// For non-blocking mode, EAGAIN means no data is available.
-			// Stop and return the frames read so far.
-			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
-				break
-			}
-
-			// EINTR is a temporary interruption; just retry the operation.
-			if errors.Is(err, syscall.EINTR) {
-				continue
-			}
-
-			// EBADF is a terminal condition for this I/O operation, often indicating
-			// the stream was closed by another thread. Propagate it to the caller.
-			if errors.Is(err, syscall.EBADF) {
-				return int(framesRead), err
-			}
-
 			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
 			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
 				if errRec := p.xrunRecover(err); errRec != nil {
@@ -208,6 +148,11 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 				}
 
 				continue
+			}
+
+			// For non-blocking mode, EAGAIN means no data is available.
+			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+				return int(framesRead), syscall.EAGAIN
 			}
 
 			return int(framesRead), fmt.Errorf("ioctl READI_FRAMES failed: %w", err)

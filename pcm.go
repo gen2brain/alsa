@@ -654,13 +654,6 @@ func (p *PCM) xrunRecover(err error) error {
 		return fmt.Errorf("recovery failed: could not prepare stream: %w", prepErr)
 	}
 
-	// For non-mmap capture streams, we must explicitly start the stream again after preparing it.
-	if (p.flags&PCM_IN) != 0 && (p.flags&PCM_MMAP) == 0 {
-		if startErr := p.Start(); startErr != nil {
-			return fmt.Errorf("recovery failed: could not start capture stream: %w", startErr)
-		}
-	}
-
 	// The stream is now in a recoverable state (PREPARED or RUNNING).
 	// The calling I/O function is responsible for continuing the operation.
 	return nil
