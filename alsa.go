@@ -2,7 +2,6 @@
 package alsa
 
 // PcmFormat defines the sample format for a PCM stream.
-// These values correspond to the SNDRV_PCM_FORMAT_* constants in the ALSA kernel headers.
 type PcmFormat int32
 
 const (
@@ -48,7 +47,6 @@ const (
 )
 
 // PcmState defines the current state of a PCM stream.
-// These values correspond to the SNDRV_PCM_STATE_* constants.
 type PcmState int32
 
 const (
@@ -174,7 +172,6 @@ type MixerEvent struct {
 }
 
 // PcmParam identifies a hardware parameter for a PCM device.
-// These values correspond to the SNDRV_PCM_HW_PARAM_* constants.
 type PcmParam int
 
 const (
