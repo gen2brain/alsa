@@ -252,57 +252,53 @@ func testPcmStop(t *testing.T) {
 
 	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &defaultConfig)
 	require.NoError(t, err)
-	// No defer on capturePcm.Close(), we manage it manually with the goroutine.
 
 	err = pcm.Link(capturePcm)
 	if err != nil {
+		capturePcm.Close()
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
 	}
 	defer pcm.Unlink()
 
 	var wg sync.WaitGroup
-	done := make(chan struct{})
 	wg.Add(1)
 
-	// Goroutine to consume data to prevent the writer from blocking.
 	go func() {
 		defer wg.Done()
 		buffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
 		for {
-			select {
-			case <-done:
-				// Close the capture PCM from within the goroutine that uses it.
-				_ = capturePcm.Close()
-
+			err := capturePcm.Read(buffer)
+			if err != nil {
+				// An error is expected when the stream is stopped/closed.
+				// This is the signal for the goroutine to exit.
 				return
-			default:
-				// This read will block until data is written or the stream is closed.
-				err := capturePcm.Read(buffer)
-				if err != nil {
-					// Expect an error when the stream is closed.
-					return
-				}
 			}
 		}
 	}()
 
-	// Write some data to start the stream
-	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
+	// Write some data to start the stream. The first write implicitly starts linked streams.
+	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()*2))
 	err = pcm.Write(buffer)
 	require.NoError(t, err)
+
+	// Give the stream a moment to ensure it's fully running.
+	time.Sleep(50 * time.Millisecond)
 
 	state := pcm.State()
 	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, state, "Stream should be in RUNNING state after writing")
 
-	// Now stop the stream
+	// Now, stop the stream. This tests the Stop() function.
 	err = pcm.Stop()
 	require.NoError(t, err, "pcm.Stop() failed")
 
 	state = pcm.State()
 	require.Equal(t, alsa.SNDRV_PCM_STATE_SETUP, state, "Stream should be in SETUP state after stopping")
 
-	// Cleanly shut down the goroutine.
-	close(done)
+	// While Stop() should ideally cause an EPIPE, closing is a more robust
+	// termination signal for the test's cleanup phase.
+	capturePcm.Close()
+
+	// Wait for the reader goroutine to finish.
 	wg.Wait()
 }
 
