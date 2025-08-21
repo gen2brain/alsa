@@ -44,6 +44,11 @@ const (
 	SNDRV_PCM_FORMAT_S18_3BE            PcmFormat = 41
 	SNDRV_PCM_FORMAT_U18_3LE            PcmFormat = 42
 	SNDRV_PCM_FORMAT_U18_3BE            PcmFormat = 43
+	SNDRV_PCM_FORMAT_DSD_U8             PcmFormat = 44
+	SNDRV_PCM_FORMAT_DSD_U16_LE         PcmFormat = 45
+	SNDRV_PCM_FORMAT_DSD_U16_BE         PcmFormat = 46
+	SNDRV_PCM_FORMAT_DSD_U32_LE         PcmFormat = 47
+	SNDRV_PCM_FORMAT_DSD_U32_BE         PcmFormat = 48
 )
 
 // PcmState defines the current state of a PCM stream.
@@ -114,8 +119,10 @@ const (
 	SNDRV_CTL_ELEM_ACCESS_READ MixerCtlAccessFlag = 1 << 0
 	// SNDRV_CTL_ELEM_ACCESS_WRITE - if set, the control is writable.
 	SNDRV_CTL_ELEM_ACCESS_WRITE MixerCtlAccessFlag = 1 << 1
-	// SNDRV_CTL_ELEM_ACCESS_TLV_READWRITE - If set, the control uses the TLV mechanism for custom data structures.
-	SNDRV_CTL_ELEM_ACCESS_TLV_READWRITE MixerCtlAccessFlag = 1 << 13
+	// SNDRV_CTL_ELEM_ACCESS_TLV_READ indicates that TLV read is possible for the control.
+	SNDRV_CTL_ELEM_ACCESS_TLV_READ MixerCtlAccessFlag = 1 << 12
+	// SNDRV_CTL_ELEM_ACCESS_TLV_WRITE indicates that TLV write is possible for the control.
+	SNDRV_CTL_ELEM_ACCESS_TLV_WRITE MixerCtlAccessFlag = 1 << 13
 )
 
 // Constants for the bitfields within snd_interval.flags to match C enum.
@@ -190,11 +197,15 @@ const (
 	SNDRV_PCM_HW_PARAM_BUFFER_SIZE  PcmParam = 17
 	SNDRV_PCM_HW_PARAM_BUFFER_BYTES PcmParam = 18
 	SNDRV_PCM_HW_PARAM_TICK_TIME    PcmParam = 19
+)
 
-	SNDRV_PCM_HW_PARAMS_NO_RESAMPLE      PcmParam = 1 << 0
-	SNDRV_PCM_HW_PARAMS_EXPORT_BUFFER    PcmParam = 1 << 1
-	SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP PcmParam = 1 << 2
-	SNDRV_PCM_HW_PARAMS_NO_DRAIN_SILENCE PcmParam = 1 << 3
+// HwParamsFlag defines flags for the snd_pcm_hw_params structure.
+type HwParamsFlag uint32
+
+const (
+	SNDRV_PCM_HW_PARAMS_NO_RESAMPLE      HwParamsFlag = 1 << 0
+	SNDRV_PCM_HW_PARAMS_EXPORT_BUFFER    HwParamsFlag = 1 << 1
+	SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP HwParamsFlag = 1 << 2
 )
 
 // PcmParamMask represents a bitmask for a PCM hardware parameter.
@@ -266,6 +277,11 @@ var PcmParamFormatNames = map[PcmFormat]string{
 	SNDRV_PCM_FORMAT_S18_3BE:            "S18_3BE",
 	SNDRV_PCM_FORMAT_U18_3LE:            "U18_3LE",
 	SNDRV_PCM_FORMAT_U18_3BE:            "U18_3BE",
+	SNDRV_PCM_FORMAT_DSD_U8:             "DSD_U8",
+	SNDRV_PCM_FORMAT_DSD_U16_LE:         "DSD_U16_LE",
+	SNDRV_PCM_FORMAT_DSD_U16_BE:         "DSD_U16_BE",
+	SNDRV_PCM_FORMAT_DSD_U32_LE:         "DSD_U32_LE",
+	SNDRV_PCM_FORMAT_DSD_U32_BE:         "DSD_U32_BE",
 }
 
 // PcmParamSubformatNames provides human-readable names for PCM subformats.

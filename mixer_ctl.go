@@ -90,7 +90,7 @@ func (ctl *MixerCtl) Type() MixerCtlType {
 // TypeString returns a string representation of the control's data type.
 func (ctl *MixerCtl) TypeString() string {
 	if ctl == nil {
-		return "UNKNOWN"
+		return "<nil>"
 	}
 
 	switch ctl.Type() {
@@ -128,7 +128,7 @@ func (ctl *MixerCtl) IsAccessTLVRw() bool {
 		return false
 	}
 
-	return (ctl.info.Access & uint32(SNDRV_CTL_ELEM_ACCESS_TLV_READWRITE)) != 0
+	return (ctl.info.Access & uint32(SNDRV_CTL_ELEM_ACCESS_TLV_READ|SNDRV_CTL_ELEM_ACCESS_TLV_WRITE)) != 0
 }
 
 // Value reads a single value from a control at a given index.
