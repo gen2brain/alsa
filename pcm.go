@@ -634,14 +634,16 @@ func (p *PCM) checkState() (bool, error) {
 // xrunRecover is an internal helper to recover from an XRUN.
 func (p *PCM) xrunRecover(err error) error {
 	isEPIPE := errors.Is(err, syscall.EPIPE)
-	isEBADFD := errors.Is(err, unix.EBADFD)
+	isESTRPIPE := errors.Is(err, unix.ESTRPIPE)
 
-	if !isEPIPE && !isEBADFD {
+	if !isEPIPE && !isESTRPIPE {
 		return err // Not an XRUN or recoverable bad state
 	}
 
 	if isEPIPE {
 		p.xruns++
+
+		return nil
 	}
 
 	if (p.flags & PCM_NORESTART) != 0 {

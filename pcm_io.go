@@ -11,7 +11,7 @@ import (
 
 // WriteI writes interleaved audio data to a playback PCM device using an ioctl call.
 // The provided `data` argument must be a slice of a supported numeric type (e.g., []int16, []float32).
-// It automatically prepares and starts the stream, recovers from underruns (EPIPE),
+// It automatically prepares and starts the stream, recovers from underruns,
 // and loops until all requested frames have been written or an unrecoverable error occurs.
 // Returns the number of frames actually written.
 func (p *PCM) WriteI(data any, frames uint32) (int, error) {
@@ -33,7 +33,6 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		return 0, nil
 	}
 
-	// Keep the data slice alive for the duration of the system calls.
 	defer runtime.KeepAlive(data)
 
 	s := p.State()
@@ -43,8 +42,8 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 			return 0, syscall.EPIPE
 		}
 
-		// If auto-restart is enabled, attempt recovery now. We use EPIPE as the triggering error.
-		if err := p.xrunRecover(syscall.EPIPE); err != nil {
+		// If auto-restart is enabled, attempt recovery now. We use ESTRPIPE as the triggering error.
+		if err := p.xrunRecover(syscall.ESTRPIPE); err != nil {
 			return 0, err
 		}
 
@@ -80,7 +79,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		if err != nil {
 			// For non-blocking mode, EAGAIN means the buffer is full.
 			// Stop and return the frames written so far.
-			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+			if errors.Is(err, syscall.EAGAIN) && (p.flags&PCM_NONBLOCK) != 0 {
 				break
 			}
 
@@ -95,9 +94,8 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 				return int(framesWritten), err
 			}
 
-			// For underruns (EPIPE), try to recover if not disabled and if the stream
-			// was not intentionally stopped (which would put it in the SETUP state).
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != SNDRV_PCM_STATE_SETUP {
+			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
+			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					// Recovery failed, return what we've written and the error.
 					return int(framesWritten), errRec
@@ -150,23 +148,18 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 			return 0, syscall.EPIPE
 		}
 
-		// Attempt recovery if auto-restart is enabled. For capture, xrunRecover will call Start() if non-MMAP.
-		if err := p.xrunRecover(syscall.EPIPE); err != nil {
+		// If auto-restart is enabled, attempt recovery now. We use ESTRPIPE as the triggering error.
+		// For capture, xrunRecover will call Start() if non-MMAP.
+		if err := p.xrunRecover(syscall.ESTRPIPE); err != nil {
 			return 0, err
 		}
 	} else if s != SNDRV_PCM_STATE_RUNNING && s != SNDRV_PCM_STATE_PREPARED {
+		// Handle initial preparation if state is OPEN or SETUP.
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
-		s = SNDRV_PCM_STATE_PREPARED
-	}
 
-	// This logic matches tinyalsa's pcm_readi, which explicitly starts
-	// a capture stream if it is not already running.
-	if s != SNDRV_PCM_STATE_RUNNING {
-		if err := p.Start(); err != nil {
-			return 0, err
-		}
+		s = SNDRV_PCM_STATE_PREPARED
 	}
 
 	bufferPtr := uintptr(0)
@@ -208,9 +201,8 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 				return int(framesRead), err
 			}
 
-			// For overruns (EPIPE), try to recover if not disabled and if the stream
-			// was not intentionally stopped (which would put it in the SETUP state).
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != SNDRV_PCM_STATE_SETUP {
+			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
+			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesRead), errRec
 				}
