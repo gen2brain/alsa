@@ -36,8 +36,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	// Keep the data slice alive for the duration of the system calls.
 	defer runtime.KeepAlive(data)
 
-	// Handle stream preparation and recovery proactively.
-	s := p.getState()
+	s := p.State()
 	if s == PCM_STATE_XRUN {
 		if (p.flags & PCM_NORESTART) != 0 {
 			// If NORESTART is set, we must return EPIPE immediately.
@@ -98,7 +97,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 
 			// For underruns (EPIPE), try to recover if not disabled and if the stream
 			// was not intentionally stopped (which would put it in the SETUP state).
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.KernelState() != PCM_STATE_SETUP {
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != PCM_STATE_SETUP {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					// Recovery failed, return what we've written and the error.
 					return int(framesWritten), errRec
@@ -108,14 +107,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 				continue
 			}
 
-			// For any other error, it's unrecoverable.
-			p.setState(PCM_STATE_XRUN)
-
 			return int(framesWritten), fmt.Errorf("ioctl WRITEI_FRAMES failed: %w", err)
-		}
-
-		if p.getState() != PCM_STATE_RUNNING {
-			p.setState(PCM_STATE_RUNNING)
 		}
 	}
 
@@ -147,12 +139,12 @@ func (p *PCM) WriteN(data any, frames uint32) (int, error) {
 
 	defer runtime.KeepAlive(data)
 
-	// Handle stream preparation and recovery proactively.
-	s := p.getState()
+	s := p.State()
 	if s == PCM_STATE_XRUN {
 		if (p.flags & PCM_NORESTART) != 0 {
 			return 0, syscall.EPIPE
 		}
+
 		// Attempt recovery if auto-restart is enabled.
 		if err := p.xrunRecover(syscall.EPIPE); err != nil {
 			return 0, err
@@ -203,7 +195,7 @@ func (p *PCM) WriteN(data any, frames uint32) (int, error) {
 				return int(framesWritten), err
 			}
 
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.KernelState() != PCM_STATE_SETUP {
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != PCM_STATE_SETUP {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesWritten), errRec
 				}
@@ -211,13 +203,7 @@ func (p *PCM) WriteN(data any, frames uint32) (int, error) {
 				continue
 			}
 
-			p.setState(PCM_STATE_XRUN)
-
 			return int(framesWritten), fmt.Errorf("ioctl WRITEN_FRAMES failed: %w", err)
-		}
-
-		if p.getState() != PCM_STATE_RUNNING {
-			p.setState(PCM_STATE_RUNNING)
 		}
 	}
 
@@ -254,8 +240,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 	defer runtime.KeepAlive(buffer)
 
-	// Handle stream preparation and recovery proactively.
-	s := p.getState()
+	s := p.State()
 	if s == PCM_STATE_XRUN {
 		if (p.flags & PCM_NORESTART) != 0 {
 			return 0, syscall.EPIPE
@@ -267,6 +252,15 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		}
 	} else if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
+			return 0, err
+		}
+		s = PCM_STATE_PREPARED
+	}
+
+	// This logic matches tinyalsa's pcm_readi, which explicitly starts
+	// a capture stream if it is not already running.
+	if s != PCM_STATE_RUNNING {
+		if err := p.Start(); err != nil {
 			return 0, err
 		}
 	}
@@ -312,7 +306,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 			// For overruns (EPIPE), try to recover if not disabled and if the stream
 			// was not intentionally stopped (which would put it in the SETUP state).
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.KernelState() != PCM_STATE_SETUP {
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != PCM_STATE_SETUP {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesRead), errRec
 				}
@@ -320,15 +314,8 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 				continue
 			}
 
-			// For any other error, it's unrecoverable.
-			p.setState(PCM_STATE_XRUN)
-
 			return int(framesRead), fmt.Errorf("ioctl READI_FRAMES failed: %w", err)
 		}
-	}
-
-	if p.getState() != PCM_STATE_RUNNING {
-		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return int(framesRead), nil
@@ -358,8 +345,7 @@ func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 
 	defer runtime.KeepAlive(buffers)
 
-	// Handle stream preparation and recovery proactively.
-	s := p.getState()
+	s := p.State()
 	if s == PCM_STATE_XRUN {
 		if (p.flags & PCM_NORESTART) != 0 {
 			return 0, syscall.EPIPE
@@ -413,7 +399,7 @@ func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 				return int(framesRead), err
 			}
 
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.KernelState() != PCM_STATE_SETUP {
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != PCM_STATE_SETUP {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesRead), errRec
 				}
@@ -421,14 +407,8 @@ func (p *PCM) ReadN(buffers any, frames uint32) (int, error) {
 				continue
 			}
 
-			p.setState(PCM_STATE_XRUN)
-
 			return int(framesRead), fmt.Errorf("ioctl READN_FRAMES failed: %w", err)
 		}
-	}
-
-	if p.getState() != PCM_STATE_RUNNING {
-		p.setState(PCM_STATE_RUNNING)
 	}
 
 	return int(framesRead), nil
@@ -476,4 +456,112 @@ func (p *PCM) Read(data any) error {
 	}
 
 	return nil
+}
+
+// checkSlice validates that the input is a slice of a supported numeric type.
+// It returns the total length of the slice data in bytes.
+func checkSlice(data any) (byteLen uint32, err error) {
+	if data == nil {
+		return 0, errors.New("data cannot be nil")
+	}
+
+	rv := reflect.ValueOf(data)
+	if rv.Kind() != reflect.Slice {
+		return 0, fmt.Errorf("expected a slice, got %T", data)
+	}
+
+	if rv.Len() == 0 {
+		return 0, nil
+	}
+
+	switch rv.Type().Elem().Kind() {
+	case reflect.Int8, reflect.Uint8,
+		reflect.Int16, reflect.Uint16,
+		reflect.Int32, reflect.Uint32,
+		reflect.Float32, reflect.Float64:
+	default:
+		return 0, fmt.Errorf("unsupported slice element type: %s", rv.Type().Elem().Kind())
+	}
+
+	return uint32(rv.Len()) * uint32(rv.Type().Elem().Size()), nil
+}
+
+// checkSliceAndGetData is a helper that combines slice validation and getting the data pointer.
+func checkSliceAndGetData(data any) (ptr unsafe.Pointer, byteLen uint32, err error) {
+	byteLen, err = checkSlice(data)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if byteLen > 0 {
+		ptr = unsafe.Pointer(reflect.ValueOf(data).Index(0).Addr().Pointer())
+	}
+
+	return ptr, byteLen, nil
+}
+
+// checkSliceOfSlices validates that the input is a slice of slices of a supported numeric type.
+// It checks channel count, type consistency, and buffer length for all inner slices.
+// It returns a slice of pointers to the data of each inner slice.
+func checkSliceOfSlices(p *PCM, data any, frames uint32) ([]uintptr, error) {
+	if data == nil {
+		return nil, errors.New("data cannot be nil")
+	}
+
+	rv := reflect.ValueOf(data)
+	if rv.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("expected a slice of slices, got %T", data)
+	}
+
+	if uint32(rv.Len()) != p.config.Channels {
+		return nil, fmt.Errorf("incorrect number of channels in data: expected %d, got %d", p.config.Channels, rv.Len())
+	}
+
+	if rv.Len() == 0 {
+		return nil, nil // No channels, nothing to do.
+	}
+
+	// Determine an expected element type and size from the first channel
+	firstInnerSlice := rv.Index(0)
+	if firstInnerSlice.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("expected a slice of slices, but first element is %T", firstInnerSlice.Interface())
+	}
+	elemType := firstInnerSlice.Type().Elem()
+
+	// Validate element type is a supported numeric type
+	switch elemType.Kind() {
+	case reflect.Int8, reflect.Uint8,
+		reflect.Int16, reflect.Uint16,
+		reflect.Int32, reflect.Uint32,
+		reflect.Float32, reflect.Float64:
+	default:
+		return nil, fmt.Errorf("unsupported slice element type: %s", elemType.Kind())
+	}
+
+	// The number of bytes per frame for a single channel's data
+	bytesPerFramePerChannel := p.FrameSize() / p.config.Channels
+	requiredBytes := frames * bytesPerFramePerChannel
+	pointers := make([]uintptr, p.config.Channels)
+
+	for i := 0; i < rv.Len(); i++ {
+		innerSlice := rv.Index(i)
+
+		// Check that all inner elements are slices of the same type
+		if innerSlice.Kind() != reflect.Slice || innerSlice.Type().Elem() != elemType {
+			return nil, fmt.Errorf("channel %d is not a slice of the expected type", i)
+		}
+
+		// Check if the buffer for this channel is large enough
+		byteLen := uint32(innerSlice.Len()) * uint32(elemType.Size())
+		if byteLen < requiredBytes {
+			return nil, fmt.Errorf("channel %d buffer too small: needs %d bytes, got %d", i, requiredBytes, byteLen)
+		}
+
+		// Get the pointer to the slice data
+		if innerSlice.Len() > 0 {
+			pointers[i] = innerSlice.Index(0).Addr().Pointer()
+		}
+	}
+
+	return pointers, nil
 }

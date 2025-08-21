@@ -26,7 +26,7 @@ type sndPcmMmapStatus struct {
 	Pad1           int32
 	HwPtr          SndPcmUframesT
 	Tstamp         timespec
-	SuspendedState int32 // PcmState
+	SuspendedState PcmState
 	_              [4]byte
 	AudioTstamp    timespec
 }

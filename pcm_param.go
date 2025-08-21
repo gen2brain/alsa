@@ -9,6 +9,11 @@ import (
 	"unsafe"
 )
 
+// PcmParams represents the hardware capabilities of a PCM device.
+type PcmParams struct {
+	params *sndPcmHwParams
+}
+
 // PcmParamsGet queries the hardware parameters for a given PCM device to get its default settings.
 // This function initializes the parameters and then uses the SNDRV_PCM_IOCTL_HW_PARAMS ioctl.
 // The kernel then fills the structure with the hardware's default or current settings.
@@ -76,11 +81,11 @@ func (pp *PcmParams) RangeMin(param PcmParam) (uint32, error) {
 		return 0, fmt.Errorf("params not initialized")
 	}
 
-	if param < PCM_PARAM_SAMPLE_BITS || param > PCM_PARAM_TICK_TIME {
+	if param < SNDRV_PCM_HW_PARAM_SAMPLE_BITS || param > SNDRV_PCM_HW_PARAM_TICK_TIME {
 		return 0, fmt.Errorf("parameter %v is not an interval type", param)
 	}
 
-	return pp.params.Intervals[param-PCM_PARAM_SAMPLE_BITS].MinVal, nil
+	return pp.params.Intervals[param-SNDRV_PCM_HW_PARAM_SAMPLE_BITS].MinVal, nil
 }
 
 // RangeMax returns the maximum value for an interval parameter.
@@ -89,11 +94,11 @@ func (pp *PcmParams) RangeMax(param PcmParam) (uint32, error) {
 		return 0, fmt.Errorf("params not initialized")
 	}
 
-	if param < PCM_PARAM_SAMPLE_BITS || param > PCM_PARAM_TICK_TIME {
+	if param < SNDRV_PCM_HW_PARAM_SAMPLE_BITS || param > SNDRV_PCM_HW_PARAM_TICK_TIME {
 		return 0, fmt.Errorf("parameter %v is not an interval type", param)
 	}
 
-	return pp.params.Intervals[param-PCM_PARAM_SAMPLE_BITS].MaxVal, nil
+	return pp.params.Intervals[param-SNDRV_PCM_HW_PARAM_SAMPLE_BITS].MaxVal, nil
 }
 
 // Mask returns the bitmask for a mask-type parameter.
@@ -102,18 +107,18 @@ func (pp *PcmParams) Mask(param PcmParam) (*PcmParamMask, error) {
 		return nil, fmt.Errorf("params not initialized")
 	}
 
-	if param < PCM_PARAM_ACCESS || param > PCM_PARAM_SUBFORMAT {
+	if param < SNDRV_PCM_HW_PARAM_ACCESS || param > SNDRV_PCM_HW_PARAM_SUBFORMAT {
 		return nil, fmt.Errorf("parameter %v is not a mask type", param)
 	}
 
-	maskPtr := &pp.params.Masks[param-PCM_PARAM_ACCESS]
+	maskPtr := &pp.params.Masks[param-SNDRV_PCM_HW_PARAM_ACCESS]
 
 	return (*PcmParamMask)(unsafe.Pointer(maskPtr)), nil
 }
 
 // FormatIsSupported checks if a given PCM format is supported.
 func (pp *PcmParams) FormatIsSupported(format PcmFormat) bool {
-	mask, err := pp.Mask(PCM_PARAM_FORMAT)
+	mask, err := pp.Mask(SNDRV_PCM_HW_PARAM_FORMAT)
 	if err != nil {
 		return false
 	}
@@ -150,7 +155,7 @@ func (pp *PcmParams) String() string {
 
 	// Helper to print format masks using the map
 	printFormatMask := func() {
-		mask, err := pp.Mask(PCM_PARAM_FORMAT)
+		mask, err := pp.Mask(SNDRV_PCM_HW_PARAM_FORMAT)
 		if err != nil {
 			return
 		}
@@ -194,14 +199,14 @@ func (pp *PcmParams) String() string {
 	}
 
 	b.WriteString("PCM device capabilities:\n")
-	printMaskSlice("Access", PCM_PARAM_ACCESS, PcmParamAccessNames)
+	printMaskSlice("Access", SNDRV_PCM_HW_PARAM_ACCESS, PcmParamAccessNames)
 	printFormatMask()
-	printMaskSlice("Subformat", PCM_PARAM_SUBFORMAT, PcmParamSubformatNames)
-	printInterval("Rate", PCM_PARAM_RATE, "Hz")
-	printInterval("Channels", PCM_PARAM_CHANNELS, "")
-	printInterval("Sample bits", PCM_PARAM_SAMPLE_BITS, "")
-	printInterval("Period size", PCM_PARAM_PERIOD_SIZE, "frames")
-	printInterval("Periods", PCM_PARAM_PERIODS, "")
+	printMaskSlice("Subformat", SNDRV_PCM_HW_PARAM_SUBFORMAT, PcmParamSubformatNames)
+	printInterval("Rate", SNDRV_PCM_HW_PARAM_RATE, "Hz")
+	printInterval("Channels", SNDRV_PCM_HW_PARAM_CHANNELS, "")
+	printInterval("Sample bits", SNDRV_PCM_HW_PARAM_SAMPLE_BITS, "")
+	printInterval("Period size", SNDRV_PCM_HW_PARAM_PERIOD_SIZE, "frames")
+	printInterval("Periods", SNDRV_PCM_HW_PARAM_PERIODS, "")
 
 	return b.String()
 }
@@ -240,11 +245,11 @@ func paramInit(p *sndPcmHwParams) {
 
 func paramSetMask(p *sndPcmHwParams, param PcmParam, bit uint32) {
 	// The first 3 params are masks
-	if param < PCM_PARAM_ACCESS || param > PCM_PARAM_SUBFORMAT {
+	if param < SNDRV_PCM_HW_PARAM_ACCESS || param > SNDRV_PCM_HW_PARAM_SUBFORMAT {
 		return
 	}
 
-	mask := &p.Masks[param-PCM_PARAM_ACCESS]
+	mask := &p.Masks[param-SNDRV_PCM_HW_PARAM_ACCESS]
 	for i := range mask.Bits {
 		mask.Bits[i] = 0
 	}
@@ -257,33 +262,33 @@ func paramSetMask(p *sndPcmHwParams, param PcmParam, bit uint32) {
 }
 
 func paramSetInt(p *sndPcmHwParams, param PcmParam, val uint32) {
-	if param < PCM_PARAM_SAMPLE_BITS || param > PCM_PARAM_TICK_TIME {
+	if param < SNDRV_PCM_HW_PARAM_SAMPLE_BITS || param > SNDRV_PCM_HW_PARAM_TICK_TIME {
 		return
 	}
 
 	// The interval array index is the parameter value minus the value of the first interval param.
-	interval := &p.Intervals[param-PCM_PARAM_SAMPLE_BITS]
+	interval := &p.Intervals[param-SNDRV_PCM_HW_PARAM_SAMPLE_BITS]
 	interval.MinVal = val
 	interval.MaxVal = val
 	interval.Flags = SNDRV_PCM_INTERVAL_INTEGER
 }
 
 func paramSetMin(p *sndPcmHwParams, param PcmParam, val uint32) {
-	if param < PCM_PARAM_SAMPLE_BITS || param > PCM_PARAM_TICK_TIME {
+	if param < SNDRV_PCM_HW_PARAM_SAMPLE_BITS || param > SNDRV_PCM_HW_PARAM_TICK_TIME {
 		return
 	}
 
-	interval := &p.Intervals[param-PCM_PARAM_SAMPLE_BITS]
+	interval := &p.Intervals[param-SNDRV_PCM_HW_PARAM_SAMPLE_BITS]
 	interval.MinVal = val
 }
 
 func paramGetInt(p *sndPcmHwParams, param PcmParam) uint32 {
-	if param < PCM_PARAM_SAMPLE_BITS || param > PCM_PARAM_TICK_TIME {
+	if param < SNDRV_PCM_HW_PARAM_SAMPLE_BITS || param > SNDRV_PCM_HW_PARAM_TICK_TIME {
 		return 0
 	}
 
 	// The interval array index is the parameter value minus the value of the first interval param.
-	interval := &p.Intervals[param-PCM_PARAM_SAMPLE_BITS]
+	interval := &p.Intervals[param-SNDRV_PCM_HW_PARAM_SAMPLE_BITS]
 
 	// Read the MinVal of the interval.
 	// The driver finalizes the configuration by narrowing the interval.

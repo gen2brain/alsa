@@ -15,79 +15,52 @@ import (
 // AvailUpdate synchronizes the PCM state with the kernel and returns the number of available frames.
 // For playback streams, this is the number of frames that can be written.
 // For capture streams, this is the number of frames that can be read.
-// This function is only available for MMAP streams.
+// This method is only available for MMAP streams.
 func (p *PCM) AvailUpdate() (int, error) {
 	if (p.flags & PCM_MMAP) == 0 {
-		return 0, fmt.Errorf("AvailUpdate() is only available for MMAP streams")
+		return 0, fmt.Errorf("method AvailUpdate() is only available for MMAP streams")
 	}
 
-	if err := p.ioctlSync(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_AVAIL_MIN | SNDRV_PCM_SYNC_PTR_HWSYNC); err != nil {
-		// If ioctlSync failed, the error code is the most reliable source for the stream's state.
-		if errors.Is(err, syscall.EPIPE) {
-			p.setState(PCM_STATE_XRUN)
+	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_HWSYNC); err != nil {
+		// On error, check the stream state. If it's an XRUN, the pointers are invalid.
+		// For playback, the buffer is empty (avail = buffer_size). For capture, no frames are readable.
+		if p.State() == PCM_STATE_XRUN {
+			if (p.flags & PCM_IN) != 0 {
+				return 0, syscall.EPIPE // Capture: No frames available
+			}
 
-			p.xruns++
-		} else if errors.Is(err, unix.EBADFD) {
-			p.setState(PCM_STATE_SETUP)
-		} else if errors.Is(err, syscall.ESTRPIPE) {
-			p.setState(PCM_STATE_SUSPENDED)
-		} else if errors.Is(err, syscall.ENODEV) {
-			p.setState(PCM_STATE_DISCONNECTED)
+			return int(p.bufferSize), syscall.EPIPE // Playback: Full buffer available
 		}
 
 		return 0, err
 	}
 
-	// After ioctlSync, the fresh values are in p.syncPtr.
-	currentState := p.syncPtr.S.State
-	p.setState(currentState)
-
-	// CRITICAL: Check the state after synchronization.
-	switch currentState {
-	case PCM_STATE_XRUN:
-		p.xruns++
-
-		return 0, syscall.EPIPE
-	case PCM_STATE_OPEN, PCM_STATE_SETUP, PCM_STATE_DRAINING:
-		return 0, unix.EBADFD
-	case PCM_STATE_SUSPENDED:
-		return 0, syscall.ESTRPIPE
-	case PCM_STATE_DISCONNECTED:
-		return 0, syscall.ENODEV
-	}
-
-	// Use the pointers from the struct updated by the ioctl.
-	hwPtr := p.syncPtr.S.HwPtr
-	// Atomically read the application pointer from the control structure. This is the canonical
-	// value, pointed to by p.mmapControl (either in shared memory or the syncPtr fallback).
-	var applPtr SndPcmUframesT
+	var applPtr, hwPtr SndPcmUframesT
 	if unsafe.Sizeof(applPtr) == 8 {
 		applPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
 	} else {
 		applPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
 	}
 
-	var avail SndPcmUframesT
+	var avail int
 	if (p.flags & PCM_IN) != 0 {
-		// Capture: available frames to read (hwPtr - applPtr)
-		avail = hwPtr - applPtr
+		// For capture, avail is the number of frames ready to be read.
+		avail = int(hwPtr) - int(applPtr)
+		if avail < 0 {
+			avail += int(p.boundary)
+		}
 	} else {
-		// Playback: available space to write (hwPtr + bufferSize - applPtr)
-		avail = hwPtr + SndPcmUframesT(p.bufferSize) - applPtr
+		// For playback, avail is the free space.
+		used := int(applPtr) - int(hwPtr)
+		if used < 0 {
+			used += int(p.boundary)
+		}
+		avail = int(p.bufferSize) - used
 	}
 
-	// Handle boundary wrapping.
-	if p.boundary > 0 && avail >= p.boundary {
-		avail -= p.boundary
-	}
-
-	// Availability (for playback: free space, for capture: filled space) cannot exceed the buffer size.
-	// This prevents underflow/overflow if pointers are inconsistent (e.g., during initialization or XRUN).
-	if avail > SndPcmUframesT(p.bufferSize) {
-		avail = SndPcmUframesT(p.bufferSize)
-	}
-
-	return int(avail), nil
+	return avail, nil
 }
 
 // AvailMax returns the maximum number of frames that can be written to a playback stream or read from a capture stream.
@@ -106,7 +79,7 @@ func (p *PCM) AvailMax() (int, error) {
 // It automatically handles waiting for buffer space and starting the stream once the 'StartThreshold' is met.
 func (p *PCM) MmapWrite(data any) (int, error) {
 	if (p.flags & PCM_MMAP) == 0 {
-		return 0, fmt.Errorf("MmapWrite can only be used with MMAP streams")
+		return 0, fmt.Errorf("method MmapWrite() can only be used with MMAP streams")
 	}
 
 	if (p.flags & PCM_IN) != 0 {
@@ -121,15 +94,6 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 	// Keep the data slice alive while we use pointers derived from it.
 	defer runtime.KeepAlive(data)
 
-	// Ensure the stream is prepared if it was stopped (e.g., via linked recovery) or not yet prepared.
-	// MMAP operations require the stream to be at least in the PREPARED state.
-	s := p.getState()
-	if s == PCM_STATE_SETUP || s == PCM_STATE_OPEN {
-		if err := p.Prepare(); err != nil {
-			return 0, err
-		}
-	}
-
 	offset := 0
 	remainingBytes := int(dataByteLen)
 
@@ -139,14 +103,31 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			break
 		}
 
-		buffer, _, framesToCopy, avail, err := p.MmapBegin(wantFrames)
+		// Ensure the stream is prepared if it was stopped (e.g., via linked recovery) or not yet prepared.
+		s := p.State()
+		if s == PCM_STATE_SETUP || s == PCM_STATE_OPEN {
+			if err := p.Prepare(); err != nil {
+				return offset, err
+			}
+		}
+
+		buffer, _, framesToCopy, _, err := p.MmapBegin(wantFrames)
 		if err != nil {
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
+			if errors.Is(err, syscall.EPIPE) {
 				if recoveryErr := p.xrunRecover(err); recoveryErr != nil {
-					return offset, recoveryErr // Recovery failed, so abort.
+					return offset, recoveryErr // XRUN recovery failed, so abort.
 				}
 
-				continue // Recovery succeeded, retry the operation.
+				continue // XRUN recovery succeeded, retry the operation.
+			}
+
+			if errors.Is(err, unix.EBADFD) {
+				// EBADFD means the stream is in a state like SETUP. Just prepare it.
+				if prepErr := p.Prepare(); prepErr != nil {
+					return offset, prepErr
+				}
+
+				continue // Retry now that the stream is PREPARED.
 			}
 
 			return offset, err
@@ -154,22 +135,9 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 		if framesToCopy == 0 {
 			// Buffer is full, so we must wait for space.
-			timeout := -1
-			if (p.flags & PCM_NOIRQ) != 0 {
-				avail, availErr := p.AvailUpdate()
-				if availErr == nil && uint32(avail) < p.config.AvailMin {
-					if p.noirqFramesPerMsec > 0 {
-						timeout = int((p.config.AvailMin - uint32(avail)) / p.noirqFramesPerMsec)
-						if timeout < 1 {
-							timeout = 1
-						}
-					}
-				}
-			}
-
-			ready, waitErr := p.Wait(timeout)
+			ready, waitErr := p.Wait(-1)
 			if waitErr != nil {
-				if errors.Is(waitErr, syscall.EPIPE) || errors.Is(waitErr, unix.EBADFD) {
+				if errors.Is(waitErr, syscall.EPIPE) {
 					// An XRUN was detected. Recover and retry.
 					if recoveryErr := p.xrunRecover(waitErr); recoveryErr != nil {
 						return offset, recoveryErr // Recovery failed, so abort.
@@ -177,26 +145,15 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 					continue // Recovery succeeded, retry the operation.
 				}
-
 				return offset, fmt.Errorf("pcm wait failed: %w", waitErr)
 			}
-
-			if !ready { // Timeout or stream not ready
-				if (p.flags & PCM_NONBLOCK) != 0 {
-					return offset, syscall.EAGAIN
-				}
-
-				// If blocking, we must ensure the stream is prepared before retrying the wait,
-				// in case the state transitioned back to SETUP (e.g., linked stream stop).
-				if p.getState() == PCM_STATE_SETUP {
-					if err := p.Prepare(); err != nil {
-						return offset, err
-					}
-				}
-
+			if !ready {
+				// This case should ideally not be hit with a timeout of -1,
+				// but we handle it defensively.
 				continue
 			}
 
+			// After a successful wait, continue the loop to try MmapBegin again.
 			continue
 		}
 
@@ -211,7 +168,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 		if err := p.MmapCommit(framesToCopy); err != nil {
 			// Check if the error is a recoverable XRUN (underrun for playback).
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
+			if errors.Is(err, syscall.EPIPE) {
 				if recoveryErr := p.xrunRecover(err); recoveryErr != nil {
 					return offset, recoveryErr
 				}
@@ -225,17 +182,15 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			}
 		}
 
-		// After a successful commit, check if we need to start the stream.
-		if p.getState() == PCM_STATE_PREPARED {
-			// We use the 'avail' value returned by MmapBegin to avoid a second syscall.
-			// 'avail' was the free space *before* the current write operation.
-			oldFramesInBuf := p.bufferSize - uint32(avail)
-			newFramesInBuf := oldFramesInBuf + framesToCopy
-
-			if newFramesInBuf >= p.config.StartThreshold {
-				if startErr := p.Start(); startErr != nil {
-					// A failed start is a failure for this write attempt.
-					return offset, startErr
+		// If the stream is in the PREPARED state after we've committed new frames,
+		// it's our responsibility to start it.
+		if p.State() == PCM_STATE_PREPARED {
+			if err := p.Start(); err != nil {
+				// EBADFD is not a fatal error here. It indicates the stream was
+				// started by another thread or the kernel in the small window
+				// between the State() check and the Start() call.
+				if !errors.Is(err, unix.EBADFD) {
+					return offset, err
 				}
 			}
 		}
@@ -246,10 +201,10 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 // MmapRead reads interleaved audio data from a capture MMAP PCM device.
 // The provided `data` must be a slice of a supported numeric type (e.g., []int16, []float32) that will receive the data.
-// It automatically handles waiting for data. The stream must be started via Start() or by a linked playback stream before this function is called.
+// It automatically handles waiting for data and starting the stream if it is in a prepared state.
 func (p *PCM) MmapRead(data any) (int, error) {
 	if (p.flags & PCM_MMAP) == 0 {
-		return 0, fmt.Errorf("MmapRead can only be used with MMAP streams")
+		return 0, fmt.Errorf("method MmapRead() can only be used with MMAP streams")
 	}
 
 	if (p.flags & PCM_IN) == 0 {
@@ -265,8 +220,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 	defer runtime.KeepAlive(data)
 
 	// Ensure the stream is prepared if it was stopped (e.g., via linked recovery) or not yet prepared.
-	// MMAP operations require the stream to be at least in the PREPARED state.
-	s := p.getState()
+	s := p.State()
 	if s == PCM_STATE_SETUP || s == PCM_STATE_OPEN {
 		if err := p.Prepare(); err != nil {
 			return 0, err
@@ -284,21 +238,28 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 		buffer, _, framesToCopy, _, err := p.MmapBegin(wantFrames)
 		if err != nil {
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
+			if errors.Is(err, syscall.EPIPE) {
 				if recoveryErr := p.xrunRecover(err); recoveryErr != nil {
-					return offset, recoveryErr // Recovery failed, so abort.
+					return offset, recoveryErr // XRUN recovery failed, so abort.
 				}
 
-				// Recovery succeeded (stream is PREPARED).
-				// We rely on the Wait loop below or the auto-start logic at the beginning of the function
-				// to restart the stream if necessary. This avoids restart race conditions with linked streams.
-				continue
+				continue // XRUN recovery succeeded, retry.
+			}
+
+			if errors.Is(err, unix.EBADFD) {
+				// EBADFD means the stream is in a state like SETUP. Just prepare it.
+				if prepErr := p.Prepare(); prepErr != nil {
+					return offset, prepErr
+				}
+
+				continue // Retry now that the stream is PREPARED.
 			}
 
 			return offset, err
 		}
 
 		if framesToCopy == 0 {
+			// If the stream is running but has no data, we must wait.
 			timeout := -1
 			if (p.flags & PCM_NOIRQ) != 0 {
 				avail, availErr := p.AvailUpdate()
@@ -315,14 +276,10 @@ func (p *PCM) MmapRead(data any) (int, error) {
 			ready, waitErr := p.Wait(timeout)
 			if waitErr != nil {
 				if errors.Is(waitErr, syscall.EPIPE) || errors.Is(waitErr, unix.EBADFD) {
-					// An XRUN was detected. Recover and retry.
 					if recoveryErr := p.xrunRecover(waitErr); recoveryErr != nil {
-						return offset, recoveryErr // Recovery failed, so abort.
+						return offset, recoveryErr
 					}
 
-					// Recovery succeeded (stream is PREPARED).
-					// Continue the loop, where MmapBegin will be retried, likely resulting in framesToCopy=0 again,
-					// leading back to Wait, where the restart logic resides (in the !ready block).
 					continue
 				}
 
@@ -334,9 +291,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 					return offset, syscall.EAGAIN
 				}
 
-				// If blocking, ensure the stream is prepared before retrying the wait,
-				// in case the state transitioned back to SETUP.
-				if p.getState() == PCM_STATE_SETUP {
+				if p.State() == PCM_STATE_SETUP {
 					if err := p.Prepare(); err != nil {
 						return offset, err
 					}
@@ -345,6 +300,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 				continue
 			}
 
+			// After a successful wait, continue loop to try MmapBegin again.
 			continue
 		}
 
@@ -385,41 +341,17 @@ func (p *PCM) MmapRead(data any) (int, error) {
 // space for writing or reading, the offset in frames from the start of the buffer, and the number of frames available in that slice.
 func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualFrames uint32, avail SndPcmUframesT, err error) {
 	if (p.flags & PCM_MMAP) == 0 {
-		err = fmt.Errorf("MmapBegin() is only available for MMAP streams")
+		err = fmt.Errorf("method MmapBegin() is only available for MMAP streams")
 		return
 	}
 
-	// For mmap streams, sync the hardware pointer and kernel state.
-	// We only need to get updates from the kernel (HWSYNC), not push our appl_ptr. Pushing appl_ptr is the job of MmapCommit.
-	if syncErr := p.ioctlSync(SNDRV_PCM_SYNC_PTR_HWSYNC); syncErr != nil {
-		// If the ioctl fails, update our state from the error code and propagate the error.
-		if errors.Is(syncErr, syscall.EPIPE) {
-			p.setState(PCM_STATE_XRUN)
-		} else if errors.Is(syncErr, unix.EBADFD) {
-			p.setState(PCM_STATE_SETUP)
-		} else if errors.Is(syncErr, syscall.ESTRPIPE) {
-			p.setState(PCM_STATE_SUSPENDED)
-		} else if errors.Is(syncErr, syscall.ENODEV) {
-			p.setState(PCM_STATE_DISCONNECTED)
-		}
+	currentState := p.State()
 
-		err = syncErr
-		return
-	}
-
-	// After a successful ioctlSync, the fresh state and hardware pointer are in p.syncPtr.
-	// We use these values for our calculations.
-	currentState := p.syncPtr.S.State
-	p.setState(currentState) // Update cached state
-
-	// CRITICAL: Check the state after syncing pointers. If the stream is in an error or transitional state,
-	// we must return an error immediately so the caller can initiate recovery.
 	switch currentState {
 	case PCM_STATE_XRUN:
 		err = syscall.EPIPE
 		return
 	case PCM_STATE_OPEN, PCM_STATE_SETUP, PCM_STATE_DRAINING:
-		// EBADFD is conventionally used to signal that the stream is stopped or in a state unsuitable for I/O.
 		err = unix.EBADFD
 		return
 	case PCM_STATE_SUSPENDED:
@@ -430,40 +362,40 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 		return
 	}
 
-	// Read the application pointer from the mmap'd control page (or the fallback struct).
-	// This is the value that was just synchronized with the kernel.
-	// Read the hardware pointer from the syncPtr struct, which was just updated by the kernel.
 	var applPtr, hwPtr SndPcmUframesT
 	if unsafe.Sizeof(applPtr) == 8 {
 		applPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
 	} else {
 		applPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
 	}
-	hwPtr = p.syncPtr.S.HwPtr
 
-	offset := applPtr % SndPcmUframesT(p.bufferSize)
-	offsetFrames = uint32(offset)
-
+	var availS SndPcmSframesT
 	if (p.flags & PCM_IN) != 0 {
-		avail = hwPtr - applPtr
+		// Capture: available frames are hw_ptr - appl_ptr
+		availS = SndPcmSframesT(hwPtr) - SndPcmSframesT(applPtr)
+		if availS < 0 {
+			availS += SndPcmSframesT(p.boundary)
+		}
 	} else {
-		avail = hwPtr + SndPcmUframesT(p.bufferSize) - applPtr
+		// Playback: used frames are appl_ptr - hw_ptr
+		used := SndPcmSframesT(applPtr) - SndPcmSframesT(hwPtr)
+		if used < 0 {
+			used += SndPcmSframesT(p.boundary)
+		}
+		// Available frames are buffer_size - used
+		availS = SndPcmSframesT(p.bufferSize) - used
 	}
 
-	if p.boundary > 0 && avail >= p.boundary {
-		avail -= p.boundary
+	avail = SndPcmUframesT(availS)
+	if wantFrames > uint32(avail) {
+		wantFrames = uint32(avail)
 	}
 
-	// Availability (for playback: free space, for capture: filled space) cannot exceed the buffer size.
-	if avail > SndPcmUframesT(p.bufferSize) {
-		avail = SndPcmUframesT(p.bufferSize)
-	}
-
+	offsetFrames = uint32(applPtr % SndPcmUframesT(p.bufferSize))
 	continuousFrames := p.bufferSize - offsetFrames
 	framesToCopy := wantFrames
-	if framesToCopy > uint32(avail) {
-		framesToCopy = uint32(avail)
-	}
 
 	if framesToCopy > continuousFrames {
 		framesToCopy = continuousFrames
@@ -471,17 +403,12 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 
 	actualFrames = framesToCopy
 
-	frameSize := uint64(PcmFramesToBytes(p, 1))
+	frameSize := uint64(p.FrameSize())
 	byteOffset := uint64(offsetFrames) * frameSize
 	byteCount := uint64(actualFrames) * frameSize
 
 	if byteOffset+byteCount > uint64(len(p.mmapBuffer)) {
-		// This condition indicates that the application pointer (applPtr) is invalid due to inconsistent state.
-		// Return EBADFD to signal an invalid state and force the caller to recover (e.g., Prepare).
-		_ = fmt.Errorf("mmap begin calculation exceeds buffer bounds: offset=%d, count=%d, buffer_len=%d. State=%v: %w",
-			byteOffset, byteCount, len(p.mmapBuffer), currentState, unix.EBADFD)
 		err = unix.EBADFD
-
 		return
 	}
 
@@ -495,17 +422,13 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 // MmapCommit commits the number of frames transferred after a MmapBegin call.
 func (p *PCM) MmapCommit(frames uint32) error {
 	if (p.flags & PCM_MMAP) == 0 {
-		return fmt.Errorf("MmapCommit() is only available for MMAP streams")
+		return fmt.Errorf("method MmapCommit() is only available for MMAP streams")
 	}
 
-	// Use atomic operations to update ApplPtr in shared memory.
-	// Load ApplPtr atomically before modification (acquire barrier).
 	var applPtr SndPcmUframesT
-	// We determine the size of SndPcmUframesT at runtime using unsafe.Sizeof.
 	ptrSize := unsafe.Sizeof(applPtr)
 
 	var currentApplPtr SndPcmUframesT
-
 	if ptrSize == 8 {
 		currentApplPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	} else {
@@ -518,8 +441,6 @@ func (p *PCM) MmapCommit(frames uint32) error {
 		newApplPtr -= p.boundary
 	}
 
-	// Use atomic store for ApplPtr to ensure release semantics (write barrier).
-	// This ensures audio data writes are visible before the pointer is updated.
 	if ptrSize == 8 {
 		atomic.StoreUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr)), uint64(newApplPtr))
 	} else {
@@ -527,27 +448,7 @@ func (p *PCM) MmapCommit(frames uint32) error {
 	}
 
 	// After updating the application pointer, we must notify the kernel and get the latest state back.
-	// HWSYNC is crucial here because it forces the kernel to update the status part of our syncPtr struct,
-	// allowing us to see if the stream auto-started as a result of this commit.
-	if err := p.ioctlSync(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_HWSYNC); err != nil {
-		// The ioctl failed, which often indicates an XRUN or other state change.
-		// Update our state from the error code and propagate the error.
-		if errors.Is(err, syscall.EPIPE) {
-			p.setState(PCM_STATE_XRUN)
-		} else if errors.Is(err, unix.EBADFD) {
-			p.setState(PCM_STATE_SETUP)
-		} else if errors.Is(err, syscall.ESTRPIPE) {
-			p.setState(PCM_STATE_SUSPENDED)
-		}
-
-		return err
-	}
-
-	// After a successful sync, update our cached state from the kernel's response.
-	// This is critical for detecting if the kernel auto-started the stream.
-	p.setState(p.syncPtr.S.State)
-
-	return nil
+	return p.syncPtr(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_HWSYNC)
 }
 
 // Timestamp returns available frames and the corresponding timestamp.
@@ -560,19 +461,14 @@ func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
 		return
 	}
 
-	// Use the STATUS ioctl to get a consistent snapshot of pointers and timestamp.
-	var status sndPcmStatus
-	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
-		err = fmt.Errorf("ioctl STATUS failed: %w", ioctlErr)
+	tmp, err := p.AvailUpdate()
+	if err != nil {
 		return
 	}
 
-	p.setState(status.State)
+	availFrames = uint32(tmp)
 
-	// status.Avail is the number of frames available for I/O.
-	// For playback, it's writable space. For capture, it's readable data.
-	availFrames = uint32(status.Avail)
-	ts := status.Tstamp
+	ts := p.mmapStatus.Tstamp
 	t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
 
 	return
@@ -580,7 +476,7 @@ func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
 
 // HWPtr returns the current hardware pointer position and the corresponding timestamp.
 // This method is only available for MMAP streams.
-func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
+func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, t time.Time, err error) {
 	if !p.IsReady() {
 		err = fmt.Errorf("PCM is not ready")
 
@@ -593,20 +489,18 @@ func (p *PCM) HWPtr() (hwPtr SndPcmUframesT, tstamp time.Time, err error) {
 		return
 	}
 
-	// Use the STATUS ioctl to get a consistent snapshot of pointer and timestamp.
-	var status sndPcmStatus
-	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
-		err = fmt.Errorf("ioctl STATUS failed: %w", ioctlErr)
-
-		return
+	if ioctlErr := p.syncPtr(SNDRV_PCM_SYNC_PTR_HWSYNC); ioctlErr != nil {
+		err = fmt.Errorf("ioctl HWSYNC failed: %w", ioctlErr)
 	}
 
-	p.setState(status.State)
+	if unsafe.Sizeof(hwPtr) == 8 {
+		hwPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
+	} else {
+		hwPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
+	}
 
-	// The snd-aloop driver may not provide a valid timestamp, so we don't treat a zero value as an error.
-	ts := status.Tstamp
-	tstamp = time.Unix(int64(ts.Sec), int64(ts.Nsec))
-	hwPtr = status.HwPtr
+	ts := p.mmapStatus.Tstamp
+	t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
 
 	return
 }
