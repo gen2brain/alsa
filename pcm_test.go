@@ -106,7 +106,9 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmDrain", testPcmDrain)
 	t.Run("PcmPause", testPcmPause)
 	t.Run("PcmLoopback", testPcmLoopback)
+	t.Run("PcmNonBlocking", testPcmNonBlocking)
 	t.Run("PcmMmapLoopback", testPcmMmapLoopback)
+	t.Run("PcmMmapNonBlocking", testPcmMmapNonBlocking)
 }
 
 func testPcmOpenAndClose(t *testing.T) {
@@ -1684,6 +1686,50 @@ func testPcmLoopback(t *testing.T) {
 	}
 }
 
+func testPcmNonBlocking(t *testing.T) {
+	t.Run("Write", func(t *testing.T) {
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_NONBLOCK, &defaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		// The buffer size of the PCM device.
+		bufferSizeInFrames := pcm.BufferSize()
+		periodSizeInBytes := alsa.PcmFramesToBytes(pcm, pcm.PeriodSize())
+		writeBuffer := make([]byte, periodSizeInBytes)
+
+		var writeErr error
+		// Write more data than the buffer can hold to force a non-blocking error.
+		// We'll write up to 2x the buffer size. The first few writes should succeed.
+		// Eventually, the buffer will fill up and a write should return EAGAIN.
+		for i := 0; i < int(bufferSizeInFrames/pcm.PeriodSize())*2; i++ {
+			_, err := pcm.Write(writeBuffer)
+			if err != nil {
+				writeErr = err
+
+				break
+			}
+		}
+
+		require.NotNil(t, writeErr, "Write loop finished without any error, expected EAGAIN")
+		assert.ErrorIs(t, writeErr, syscall.EAGAIN, "Expected EAGAIN when writing to a full non-blocking buffer")
+	})
+
+	t.Run("Read", func(t *testing.T) {
+		// Open a capture stream in non-blocking mode.
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_NONBLOCK, &defaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		// Attempt to read when no data is available.
+		buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
+		read, err := pcm.Read(buffer)
+
+		// Should return 0 frames read and EAGAIN.
+		assert.Equal(t, 0, read, "Read should return 0 frames when no data is available")
+		assert.ErrorIs(t, err, syscall.EAGAIN, "Expected EAGAIN when reading from an empty non-blocking buffer")
+	})
+}
+
 func testPcmMmapLoopback(t *testing.T) {
 	// Use separate configs for playback and capture to handle start thresholds correctly.
 	playbackConfig := defaultConfig
@@ -1924,6 +1970,46 @@ func testPcmMmapLoopback(t *testing.T) {
 	energyMtx.Lock()
 	assert.True(t, energyFound, "Did not detect any signal energy in the captured audio")
 	energyMtx.Unlock()
+}
+
+func testPcmMmapNonBlocking(t *testing.T) {
+	t.Run("Write", func(t *testing.T) {
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_MMAP|alsa.PCM_NONBLOCK, &defaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		require.NoError(t, pcm.Prepare())
+
+		// A buffer larger than the device buffer to guarantee we can trigger EAGAIN.
+		bufferSizeInBytes := alsa.PcmFramesToBytes(pcm, pcm.BufferSize())
+		writeBuffer := make([]byte, bufferSizeInBytes*2)
+
+		// This write should fill the device buffer and return EAGAIN.
+		// It will write up to bufferSizeInBytes and then fail.
+		written, err := pcm.MmapWrite(writeBuffer)
+
+		require.ErrorIs(t, err, syscall.EAGAIN, "Expected EAGAIN when MmapWrite fills the buffer")
+		// It should have written some data, but not more than the internal buffer size.
+		assert.Greater(t, written, 0, "MmapWrite should have written some data before returning EAGAIN")
+		assert.LessOrEqual(t, written, int(bufferSizeInBytes), "MmapWrite should not write more than the buffer size")
+	})
+
+	t.Run("Read", func(t *testing.T) {
+		// Open a capture stream in non-blocking mode.
+		pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_MMAP|alsa.PCM_NONBLOCK, &defaultConfig)
+		require.NoError(t, err)
+		defer pcm.Close()
+
+		require.NoError(t, pcm.Prepare())
+
+		// Attempt to read when no data is available.
+		buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
+		read, err := pcm.MmapRead(buffer)
+
+		// Should return 0 bytes read and EAGAIN.
+		assert.Equal(t, 0, read, "MmapRead should return 0 bytes when no data is available")
+		assert.ErrorIs(t, err, syscall.EAGAIN, "Expected EAGAIN when reading from an empty non-blocking mmap buffer")
+	})
 }
 
 // sineToneGenerator is a helper for audio tests that generates a sine wave.

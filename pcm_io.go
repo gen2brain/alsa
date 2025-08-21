@@ -30,7 +30,7 @@ func (p *PCM) Write(data any) (int, error) {
 	}
 
 	if frames == 0 || requiredBytes == 0 {
-		return 0, fmt.Errorf("invalid data for Write: %w", err)
+		return 0, fmt.Errorf("invalid data for Write")
 	}
 
 	defer runtime.KeepAlive(data)
@@ -75,8 +75,8 @@ func (p *PCM) Write(data any) (int, error) {
 			}
 
 			// For non-blocking mode, EAGAIN means the buffer is full.
-			if errors.Is(err, syscall.EAGAIN) && (p.flags&PCM_NONBLOCK) != 0 {
-				break
+			if (p.flags&PCM_NONBLOCK) != 0 && errors.Is(err, syscall.EAGAIN) {
+				return int(framesWritten), syscall.EAGAIN
 			}
 
 			return int(framesWritten), fmt.Errorf("ioctl WRITEI_FRAMES failed: %w", err)
@@ -111,7 +111,7 @@ func (p *PCM) Read(data any) (int, error) {
 	}
 
 	if frames == 0 || requiredBytes == 0 {
-		return 0, fmt.Errorf("invalid data for Read: %w", err)
+		return 0, fmt.Errorf("invalid data for Read")
 	}
 
 	defer runtime.KeepAlive(data)

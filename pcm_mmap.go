@@ -1,14 +1,11 @@
 package alsa
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 // MmapWrite writes interleaved audio data to a playback MMAP PCM device.
@@ -53,24 +50,16 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 		buffer, _, framesToCopy, _, err := p.mmapBegin(wantFrames)
 		if err != nil {
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.ESTRPIPE) {
-				if recoveryErr := p.xrunRecover(err); recoveryErr != nil {
-					return offset, recoveryErr
-				}
-
-				continue
-			}
-
-			if errors.Is(err, syscall.EAGAIN) && (p.flags&PCM_NONBLOCK) != 0 {
-				return offset, syscall.EAGAIN
-			}
-
 			return offset, err
 		}
 
 		if framesToCopy == 0 {
 			// If the stream is running but has no data, we must wait.
 			timeout := -1
+
+			if (p.flags & PCM_NONBLOCK) != 0 {
+				return offset, syscall.EAGAIN
+			}
 
 			if (p.flags & PCM_NOIRQ) != 0 {
 				if uint32(avail) < p.config.AvailMin {
@@ -106,16 +95,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		remainingBytes -= bytesToCopy
 
 		if err := p.mmapCommit(framesToCopy); err != nil {
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.ESTRPIPE) {
-				if recoveryErr := p.xrunRecover(err); recoveryErr != nil {
-					return offset, recoveryErr
-				}
-
-				continue
-			} else {
-				// If it's not an XRUN, it's a fatal error.
-				return offset, err
-			}
+			return offset, err
 		}
 
 		if p.State() == SNDRV_PCM_STATE_PREPARED && p.bufferSize-uint32(avail) >= p.config.StartThreshold {
@@ -182,6 +162,10 @@ func (p *PCM) MmapRead(data any) (int, error) {
 		if framesToCopy == 0 {
 			// If the stream is running but has no data, we must wait.
 			timeout := -1
+
+			if (p.flags & PCM_NONBLOCK) != 0 {
+				return offset, syscall.EAGAIN
+			}
 
 			if (p.flags & PCM_NOIRQ) != 0 {
 				if uint32(avail) < p.config.AvailMin {
