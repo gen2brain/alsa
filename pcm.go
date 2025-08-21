@@ -435,8 +435,6 @@ func (p *PCM) Stop() error {
 }
 
 // Pause pauses or resumes the PCM stream.
-// Calling Pause(true) on a running stream will pause it.
-// Calling Pause(false) on a paused stream will resume it.
 func (p *PCM) Pause(enable bool) error {
 	var arg int32
 	if enable {
@@ -519,7 +517,6 @@ func (p *PCM) Delay() (int, error) {
 
 // Wait waits for the PCM to become ready for I/O or until a timeout occurs.
 // Returns true if the device is ready, false on timeout.
-// On error, it may return a specific error code like EPIPE, ESTRPIPE or ENODEV.
 func (p *PCM) Wait(timeoutMs int) (bool, error) {
 	if !p.IsReady() {
 		return false, fmt.Errorf("PCM handle not ready")
@@ -556,9 +553,18 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 
 	revents := pfd[0].Revents
 	if (revents & (unix.POLLERR | unix.POLLNVAL)) != 0 {
-		// An error condition was reported. Call checkState to get the specific
-		// ALSA stream error (e.g., EPIPE for XRUN).
-		return p.checkState()
+		s := p.State()
+
+		switch s {
+		case SNDRV_PCM_STATE_XRUN:
+			return false, fmt.Errorf("stream xrun: %w", syscall.EPIPE)
+		case SNDRV_PCM_STATE_SUSPENDED:
+			return false, fmt.Errorf("stream suspended: %w", syscall.ESTRPIPE)
+		case SNDRV_PCM_STATE_DISCONNECTED:
+			return false, fmt.Errorf("device disconnected: %w", syscall.ENODEV)
+		default:
+			return false, fmt.Errorf("input/output error: %w", syscall.EIO)
+		}
 	}
 
 	// If we are here, the device is ready for I/O.
@@ -584,53 +590,6 @@ func (p *PCM) State() PcmState {
 	return status.State
 }
 
-// checkState queries the PCM status and returns an error if the stream is in an error state.
-// Returns true if the stream is ready for I/O, false otherwise (with an accompanying error if applicable).
-func (p *PCM) checkState() (bool, error) {
-	s := p.State()
-
-	switch s {
-	case SNDRV_PCM_STATE_XRUN:
-		return false, fmt.Errorf("stream xrun: %w", syscall.EPIPE)
-	case SNDRV_PCM_STATE_SUSPENDED:
-		return false, fmt.Errorf("stream suspended: %w", syscall.ESTRPIPE)
-	case SNDRV_PCM_STATE_DISCONNECTED:
-		return false, fmt.Errorf("device disconnected: %w", syscall.ENODEV)
-	}
-
-	// If the mmap'd state seems okay, but poll reported an error (POLLERR/POLLHUP/POLLNVAL), we must use the ioctl
-	// to get the definitive status from the kernel. This is the only way to be 100% sure, and is only done on an error path.
-	var status sndPcmStatus
-	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
-		// If we can't get status, it's a critical failure.
-		return false, fmt.Errorf("ioctl STATUS failed: %w", ioctlErr)
-	}
-
-	switch status.State {
-	case SNDRV_PCM_STATE_XRUN:
-		return false, fmt.Errorf("stream xrun: %w", syscall.EPIPE)
-	case SNDRV_PCM_STATE_SUSPENDED:
-		return false, fmt.Errorf("stream suspended: %w", syscall.ESTRPIPE)
-	case SNDRV_PCM_STATE_DISCONNECTED:
-		return false, fmt.Errorf("device disconnected: %w", syscall.ENODEV)
-	case SNDRV_PCM_STATE_OPEN, SNDRV_PCM_STATE_SETUP:
-		// These states are not ready for I/O. Return EBADFD to signal a bad state
-		// that the caller should recover from, rather than treating it as a timeout.
-		return false, unix.EBADFD
-	case SNDRV_PCM_STATE_PREPARED:
-		// For playback, PREPARED means ready to accept data.
-		if (p.flags & PCM_IN) == 0 {
-			return true, nil
-		}
-
-		// For capture, PREPARED means healthy, but not running yet (e.g., waiting for linked start).
-		return false, nil
-	default:
-		// All other states (RUNNING, DRAINING, PAUSED) are considered ready for I/O by Wait().
-		return true, nil
-	}
-}
-
 // xrunRecover is an internal helper to recover from an XRUN.
 func (p *PCM) xrunRecover(err error) error {
 	isEPIPE := errors.Is(err, syscall.EPIPE)
@@ -654,8 +613,6 @@ func (p *PCM) xrunRecover(err error) error {
 		return fmt.Errorf("recovery failed: could not prepare stream: %w", prepErr)
 	}
 
-	// The stream is now in a recoverable state (PREPARED or RUNNING).
-	// The calling I/O function is responsible for continuing the operation.
 	return nil
 }
 
