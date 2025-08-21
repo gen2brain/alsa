@@ -52,15 +52,24 @@ const (
 type PcmState int32
 
 const (
-	SNDRV_PCM_STATE_OPEN         PcmState = 0 // Stream is open.
-	SNDRV_PCM_STATE_SETUP        PcmState = 1 // Stream has a setup.
-	SNDRV_PCM_STATE_PREPARED     PcmState = 2 // Stream is ready to start.
-	SNDRV_PCM_STATE_RUNNING      PcmState = 3 // Stream is running.
-	SNDRV_PCM_STATE_XRUN         PcmState = 4 // Stream reached an underrun or overrun.
-	SNDRV_PCM_STATE_DRAINING     PcmState = 5 // Stream is draining.
-	SNDRV_PCM_STATE_PAUSED       PcmState = 6 // Stream is paused.
-	SNDRV_PCM_STATE_SUSPENDED    PcmState = 7 // Hardware is suspended.
-	SNDRV_PCM_STATE_DISCONNECTED PcmState = 8 // Hardware is disconnected.
+	// SNDRV_PCM_STATE_OPEN indicates the stream is open but not yet configured.
+	SNDRV_PCM_STATE_OPEN PcmState = 0
+	// SNDRV_PCM_STATE_SETUP indicates the stream has been configured but not prepared.
+	SNDRV_PCM_STATE_SETUP PcmState = 1
+	// SNDRV_PCM_STATE_PREPARED indicates the stream is prepared and ready for I/O.
+	SNDRV_PCM_STATE_PREPARED PcmState = 2
+	// SNDRV_PCM_STATE_RUNNING indicates the stream is actively transferring data.
+	SNDRV_PCM_STATE_RUNNING PcmState = 3
+	// SNDRV_PCM_STATE_XRUN indicates an underrun (for playback) or overrun (for capture) occurred.
+	SNDRV_PCM_STATE_XRUN PcmState = 4
+	// SNDRV_PCM_STATE_DRAINING indicates the stream is playing out the last remaining frames in the buffer.
+	SNDRV_PCM_STATE_DRAINING PcmState = 5
+	// SNDRV_PCM_STATE_PAUSED indicates the stream is paused.
+	SNDRV_PCM_STATE_PAUSED PcmState = 6
+	// SNDRV_PCM_STATE_SUSPENDED indicates the hardware is in a suspended state (e.g., due to power management).
+	SNDRV_PCM_STATE_SUSPENDED PcmState = 7
+	// SNDRV_PCM_STATE_DISCONNECTED indicates the hardware has been disconnected.
+	SNDRV_PCM_STATE_DISCONNECTED PcmState = 8
 )
 
 // PcmFlag defines flags for opening a PCM stream.
@@ -99,16 +108,16 @@ const (
 	SNDRV_CTL_ELEM_TYPE_UNKNOWN    MixerCtlType = -1
 )
 
-// CtlAccessFlag defines the access permissions for a mixer control.
-type CtlAccessFlag uint32
+// MixerCtlAccessFlag defines the access permissions for a mixer control.
+type MixerCtlAccessFlag uint32
 
 const (
-	// If set, the control is readable.
-	SNDRV_CTL_ELEM_ACCESS_READ CtlAccessFlag = 1 << 0
-	// If set, the control is writable.
-	SNDRV_CTL_ELEM_ACCESS_WRITE CtlAccessFlag = 1 << 1
-	// If set, the control uses the TLV mechanism for custom data structures.
-	SNDRV_CTL_ELEM_ACCESS_TLV_READWRITE CtlAccessFlag = 1 << 13
+	// SNDRV_CTL_ELEM_ACCESS_READ - if set, the control is readable.
+	SNDRV_CTL_ELEM_ACCESS_READ MixerCtlAccessFlag = 1 << 0
+	// SNDRV_CTL_ELEM_ACCESS_WRITE - if set, the control is writable.
+	SNDRV_CTL_ELEM_ACCESS_WRITE MixerCtlAccessFlag = 1 << 1
+	// SNDRV_CTL_ELEM_ACCESS_TLV_READWRITE - If set, the control uses the TLV mechanism for custom data structures.
+	SNDRV_CTL_ELEM_ACCESS_TLV_READWRITE MixerCtlAccessFlag = 1 << 13
 )
 
 // Constants for the bitfields within snd_interval.flags to match C enum.
@@ -148,13 +157,13 @@ type MixerEventType uint32
 const (
 	SNDRV_CTL_EVENT_ELEM = 0
 
-	// Indicates that a control element's value has changed.
+	// SNDRV_CTL_EVENT_MASK_VALUE indicates that a control element's value has changed.
 	SNDRV_CTL_EVENT_MASK_VALUE MixerEventType = 1 << 0
-	// Indicates that a control element's metadata (e.g., range) has changed.
+	// SNDRV_CTL_EVENT_MASK_INFO indicates that a control element's metadata (e.g., range) has changed.
 	SNDRV_CTL_EVENT_MASK_INFO MixerEventType = 1 << 1
-	// Indicates that a control element has been added.
+	// SNDRV_CTL_EVENT_MASK_ADD indicates that a control element has been added.
 	SNDRV_CTL_EVENT_MASK_ADD MixerEventType = 1 << 2
-	// Indicates a control element has been removed.
+	// SNDRV_CTL_EVENT_MASK_REMOVE indicates a control element has been removed.
 	SNDRV_CTL_EVENT_MASK_REMOVE MixerEventType = 1 << 3
 )
 
