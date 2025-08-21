@@ -116,22 +116,7 @@ func PcmOpen(card, device uint, flags PcmFlag, config *Config) (*PCM, error) {
 		subdevice: info.Subdevice,
 	}
 
-	// If no config is provided, use a default configuration.
-	// The start/stop thresholds are left at 0 to be calculated in SetConfig.
-	var finalConfig Config
-	if config == nil {
-		finalConfig = Config{
-			Channels:    2,
-			Rate:        48000,
-			PeriodSize:  1024,
-			PeriodCount: 4,
-			Format:      PCM_FORMAT_S16_LE,
-		}
-	} else {
-		finalConfig = *config
-	}
-
-	if err := pcm.SetConfig(&finalConfig); err != nil {
+	if err := pcm.SetConfig(config); err != nil {
 		_ = pcm.Close()
 
 		return nil, fmt.Errorf("failed to set PCM config: %w", err)
@@ -315,11 +300,7 @@ func (p *PCM) SetConfig(config *Config) error {
 	if (p.flags & PCM_MMAP) != 0 {
 		paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_ACCESS, SNDRV_PCM_ACCESS_MMAP_INTERLEAVED)
 	} else {
-		if (p.flags & PCM_NONINTERLEAVED) != 0 {
-			paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_ACCESS, SNDRV_PCM_ACCESS_RW_NONINTERLEAVED)
-		} else {
-			paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_ACCESS, SNDRV_PCM_ACCESS_RW_INTERLEAVED)
-		}
+		paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_ACCESS, SNDRV_PCM_ACCESS_RW_INTERLEAVED)
 	}
 
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_HW_PARAMS, uintptr(unsafe.Pointer(hwParams))); err != nil {
