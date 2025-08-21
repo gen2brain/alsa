@@ -131,15 +131,15 @@ func printControl(ctl *alsa.MixerCtl, listOnly bool) {
 	fmt.Printf("%d: %s (%s, %d values)\n", ctl.ID(), ctl.Name(), ctl.TypeString(), ctl.NumValues())
 
 	switch ctl.Type() {
-	case alsa.MIXER_CTL_TYPE_INT:
+	case alsa.SNDRV_CTL_ELEM_TYPE_INTEGER:
 		printIntegerControl(ctl)
-	case alsa.MIXER_CTL_TYPE_BOOL:
+	case alsa.SNDRV_CTL_ELEM_TYPE_BOOLEAN:
 		printBooleanControl(ctl)
-	case alsa.MIXER_CTL_TYPE_ENUM:
+	case alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		printEnumControl(ctl)
-	case alsa.MIXER_CTL_TYPE_BYTE:
+	case alsa.SNDRV_CTL_ELEM_TYPE_BYTES:
 		printByteControl(ctl)
-	case alsa.MIXER_CTL_TYPE_INT64:
+	case alsa.SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		printInt64Control(ctl)
 	default:
 		fmt.Println("  Value: <unsupported type>")
@@ -292,7 +292,7 @@ func setControlValue(ctl *alsa.MixerCtl, values []string) error {
 // setSingleValue sets a single value on a control at a specific index.
 func setSingleValue(ctl *alsa.MixerCtl, index uint, valueStr string) error {
 	switch ctl.Type() {
-	case alsa.MIXER_CTL_TYPE_INT:
+	case alsa.SNDRV_CTL_ELEM_TYPE_INTEGER:
 		// Handle percentage suffix
 		if strings.HasSuffix(valueStr, "%") {
 			pctStr := strings.TrimSuffix(valueStr, "%")
@@ -311,7 +311,7 @@ func setSingleValue(ctl *alsa.MixerCtl, index uint, valueStr string) error {
 
 		return ctl.SetValue(index, val)
 
-	case alsa.MIXER_CTL_TYPE_BOOL:
+	case alsa.SNDRV_CTL_ELEM_TYPE_BOOLEAN:
 		val, err := parseBool(valueStr)
 		if err != nil {
 			return err
@@ -319,10 +319,10 @@ func setSingleValue(ctl *alsa.MixerCtl, index uint, valueStr string) error {
 
 		return ctl.SetValue(index, val)
 
-	case alsa.MIXER_CTL_TYPE_ENUM:
+	case alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		return ctl.SetEnumByString(valueStr)
 
-	case alsa.MIXER_CTL_TYPE_INT64:
+	case alsa.SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		val, err := strconv.ParseInt(valueStr, 10, 64)
 		if err != nil {
 			return fmt.Errorf("invalid int64 value '%s'", valueStr)
@@ -330,7 +330,7 @@ func setSingleValue(ctl *alsa.MixerCtl, index uint, valueStr string) error {
 
 		return ctl.SetValue64(index, val)
 
-	case alsa.MIXER_CTL_TYPE_BYTE:
+	case alsa.SNDRV_CTL_ELEM_TYPE_BYTES:
 		// Setting byte arrays via command line is complex and not implemented here.
 		return fmt.Errorf("setting BYTE controls via command line is not supported")
 

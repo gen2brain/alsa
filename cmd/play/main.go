@@ -165,14 +165,14 @@ func main() {
 		// Convert the generic `[]int` from the decoder to the specific typed
 		// slice needed by the ALSA device.
 		switch config.Format {
-		case alsa.PCM_FORMAT_S8:
+		case alsa.SNDRV_PCM_FORMAT_S8:
 			slice := make([]int8, n)
 			for i, s := range samples {
 				// Scale sample from source bit depth to 8-bit.
 				slice[i] = int8(s >> (decoder.BitDepth - 8))
 			}
 			dataToWrite = slice
-		case alsa.PCM_FORMAT_S16_LE:
+		case alsa.SNDRV_PCM_FORMAT_S16_LE:
 			slice := make([]int16, n)
 			for i, s := range samples {
 				// Clamp value to int16 range before casting.
@@ -184,14 +184,14 @@ func main() {
 				slice[i] = int16(s)
 			}
 			dataToWrite = slice
-		case alsa.PCM_FORMAT_S24_LE, alsa.PCM_FORMAT_S32_LE:
+		case alsa.SNDRV_PCM_FORMAT_S24_LE, alsa.SNDRV_PCM_FORMAT_S32_LE:
 			// For 24-bit and 32-bit formats, we pass a slice of int32.
 			slice := make([]int32, n)
 			for i, s := range samples {
 				slice[i] = int32(s)
 			}
 			dataToWrite = slice
-		case alsa.PCM_FORMAT_FLOAT_LE:
+		case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
 			slice := make([]float32, n)
 			// Normalize integer sample to float range [-1.0, 1.0].
 			maxVal := 1 << (decoder.BitDepth - 1)
@@ -199,7 +199,7 @@ func main() {
 				slice[i] = float32(s) / float32(maxVal)
 			}
 			dataToWrite = slice
-		case alsa.PCM_FORMAT_FLOAT64_LE:
+		case alsa.SNDRV_PCM_FORMAT_FLOAT64_LE:
 			slice := make([]float64, n)
 			// Normalize integer sample to float range [-1.0, 1.0].
 			maxVal := 1 << (decoder.BitDepth - 1)
@@ -256,17 +256,17 @@ func determineFormat(formatStr string, decoder *wav.Decoder) (alsa.PcmFormat, er
 	if formatStr != "" {
 		switch formatStr {
 		case "s8":
-			return alsa.PCM_FORMAT_S8, nil
+			return alsa.SNDRV_PCM_FORMAT_S8, nil
 		case "s16":
-			return alsa.PCM_FORMAT_S16_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_S16_LE, nil
 		case "s24":
-			return alsa.PCM_FORMAT_S24_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_S24_LE, nil
 		case "s32":
-			return alsa.PCM_FORMAT_S32_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_S32_LE, nil
 		case "float":
-			return alsa.PCM_FORMAT_FLOAT_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_FLOAT_LE, nil
 		case "float64":
-			return alsa.PCM_FORMAT_FLOAT64_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_FLOAT64_LE, nil
 		default:
 			return 0, fmt.Errorf("unsupported format string: %s", formatStr)
 		}
@@ -275,9 +275,9 @@ func determineFormat(formatStr string, decoder *wav.Decoder) (alsa.PcmFormat, er
 	if decoder.WavAudioFormat == 3 { // IEEE float
 		switch decoder.BitDepth {
 		case 32:
-			return alsa.PCM_FORMAT_FLOAT_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_FLOAT_LE, nil
 		case 64:
-			return alsa.PCM_FORMAT_FLOAT64_LE, nil
+			return alsa.SNDRV_PCM_FORMAT_FLOAT64_LE, nil
 		default:
 			return 0, fmt.Errorf("unsupported float bit depth from WAV: %d", decoder.BitDepth)
 		}
@@ -286,13 +286,13 @@ func determineFormat(formatStr string, decoder *wav.Decoder) (alsa.PcmFormat, er
 	// Assume integer PCM.
 	switch decoder.BitDepth {
 	case 8:
-		return alsa.PCM_FORMAT_S8, nil
+		return alsa.SNDRV_PCM_FORMAT_S8, nil
 	case 16:
-		return alsa.PCM_FORMAT_S16_LE, nil
+		return alsa.SNDRV_PCM_FORMAT_S16_LE, nil
 	case 24:
-		return alsa.PCM_FORMAT_S24_LE, nil
+		return alsa.SNDRV_PCM_FORMAT_S24_LE, nil
 	case 32:
-		return alsa.PCM_FORMAT_S32_LE, nil
+		return alsa.SNDRV_PCM_FORMAT_S32_LE, nil
 	default:
 		return 0, fmt.Errorf("unsupported integer bit depth from WAV: %d", decoder.BitDepth)
 	}

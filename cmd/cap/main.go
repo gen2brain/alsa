@@ -101,14 +101,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// For capture, the stream must be explicitly started to begin receiving data.
-	if mmap {
-		if err := pcm.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error starting MMAP stream: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	// Create the output WAV file.
 	wavFile, err := os.Create(outputPath)
 	if err != nil {
@@ -214,13 +206,13 @@ func main() {
 func determineFormat(formatStr string) (alsa.PcmFormat, int, error) {
 	switch formatStr {
 	case "s16":
-		return alsa.PCM_FORMAT_S16_LE, 16, nil
+		return alsa.SNDRV_PCM_FORMAT_S16_LE, 16, nil
 	case "s24":
 		// Note: S24_LE in ALSA is 24 bits of data packed into a 32-bit integer.
 		// The wav encoder expects the bit depth to be 24.
-		return alsa.PCM_FORMAT_S24_LE, 24, nil
+		return alsa.SNDRV_PCM_FORMAT_S24_LE, 24, nil
 	case "s32":
-		return alsa.PCM_FORMAT_S32_LE, 32, nil
+		return alsa.SNDRV_PCM_FORMAT_S32_LE, 32, nil
 	default:
 		return 0, 0, fmt.Errorf("unsupported format: '%s'. Supported formats are s16, s24, s32", formatStr)
 	}
@@ -240,10 +232,10 @@ func bytesToIntBuffer(data []byte, format alsa.PcmFormat, channels int) (*audio.
 	offset := 0
 	for i := 0; i < numSamples; i++ {
 		switch format {
-		case alsa.PCM_FORMAT_S16_LE:
+		case alsa.SNDRV_PCM_FORMAT_S16_LE:
 			sample := int16(binary.LittleEndian.Uint16(data[offset:]))
 			intData[i] = int(sample)
-		case alsa.PCM_FORMAT_S24_LE:
+		case alsa.SNDRV_PCM_FORMAT_S24_LE:
 			// S24_LE is stored in 32 bits (4 bytes), with the upper 8 bits unused.
 			// We read 3 bytes in little-endian order and sign-extend it.
 			val := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16
@@ -251,7 +243,7 @@ func bytesToIntBuffer(data []byte, format alsa.PcmFormat, channels int) (*audio.
 				val |= 0xFF000000 // Sign extend
 			}
 			intData[i] = int(int32(val))
-		case alsa.PCM_FORMAT_S32_LE:
+		case alsa.SNDRV_PCM_FORMAT_S32_LE:
 			sample := int32(binary.LittleEndian.Uint32(data[offset:]))
 			intData[i] = int(sample)
 		default:
@@ -262,11 +254,11 @@ func bytesToIntBuffer(data []byte, format alsa.PcmFormat, channels int) (*audio.
 
 	bitDepth := 0
 	switch format {
-	case alsa.PCM_FORMAT_S16_LE:
+	case alsa.SNDRV_PCM_FORMAT_S16_LE:
 		bitDepth = 16
-	case alsa.PCM_FORMAT_S24_LE:
+	case alsa.SNDRV_PCM_FORMAT_S24_LE:
 		bitDepth = 24
-	case alsa.PCM_FORMAT_S32_LE:
+	case alsa.SNDRV_PCM_FORMAT_S32_LE:
 		bitDepth = 32
 	}
 
