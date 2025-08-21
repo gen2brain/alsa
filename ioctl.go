@@ -18,66 +18,66 @@ func ioctl(fd uintptr, req uintptr, arg uintptr) error {
 // io builds an ioctl request code for a command with no data transfer.
 func io(typ, nr uintptr) uintptr {
 	const (
-		_IOC_NRBITS    = 8
-		_IOC_TYPEBITS  = 8
-		_IOC_SIZEBITS  = 14
-		_IOC_NRSHIFT   = 0
-		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
-		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
-		_IOC_DIRSHIFT  = _IOC_SIZESHIFT + _IOC_SIZEBITS
-		_IOC_NONE      = 0
+		iocNrbits    = 8
+		iocTypebits  = 8
+		iocSizebits  = 14
+		iocNrshift   = 0
+		iocTypeshift = iocNrshift + iocNrbits
+		iocSizeshift = iocTypeshift + iocTypebits
+		iocDirshift  = iocSizeshift + iocSizebits
+		iocNone      = 0
 	)
 
-	return ((_IOC_NONE) << _IOC_DIRSHIFT) | (typ << _IOC_TYPESHIFT) | (nr << _IOC_NRSHIFT) | (0 << _IOC_SIZESHIFT)
+	return ((iocNone) << iocDirshift) | (typ << iocTypeshift) | (nr << iocNrshift) | (0 << iocSizeshift)
 }
 
 // iow builds an ioctl request code for a write-only operation.
 func iow(typ, nr, size uintptr) uintptr {
 	const (
-		_IOC_NRBITS    = 8
-		_IOC_TYPEBITS  = 8
-		_IOC_SIZEBITS  = 14
-		_IOC_NRSHIFT   = 0
-		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
-		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
-		_IOC_DIRSHIFT  = _IOC_SIZESHIFT + _IOC_SIZEBITS
-		_IOC_WRITE     = 1
+		iocNrbits    = 8
+		iocTypebits  = 8
+		iocSizebits  = 14
+		iocNrshift   = 0
+		iocTypeshift = iocNrshift + iocNrbits
+		iocSizeshift = iocTypeshift + iocTypebits
+		iocDirshift  = iocSizeshift + iocSizebits
+		iocWrite     = 1
 	)
 
-	return ((_IOC_WRITE) << _IOC_DIRSHIFT) | (typ << _IOC_TYPESHIFT) | (nr << _IOC_NRSHIFT) | (size << _IOC_SIZESHIFT)
+	return ((iocWrite) << iocDirshift) | (typ << iocTypeshift) | (nr << iocNrshift) | (size << iocSizeshift)
 }
 
 // ior builds a read-only ioctl request code.
 func ior(typ, nr, size uintptr) uintptr {
 	const (
-		_IOC_NRBITS    = 8
-		_IOC_TYPEBITS  = 8
-		_IOC_SIZEBITS  = 14
-		_IOC_NRSHIFT   = 0
-		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
-		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
-		_IOC_DIRSHIFT  = _IOC_SIZESHIFT + _IOC_SIZEBITS
-		_IOC_READ      = 2
+		iocNrbits    = 8
+		iocTypebits  = 8
+		iocSizebits  = 14
+		iocNrshift   = 0
+		iocTypeshift = iocNrshift + iocNrbits
+		iocSizeshift = iocTypeshift + iocTypebits
+		iocDirshift  = iocSizeshift + iocSizebits
+		iocRead      = 2
 	)
 
-	return ((_IOC_READ) << _IOC_DIRSHIFT) | (typ << _IOC_TYPESHIFT) | (nr << _IOC_NRSHIFT) | (size << _IOC_SIZESHIFT)
+	return ((iocRead) << iocDirshift) | (typ << iocTypeshift) | (nr << iocNrshift) | (size << iocSizeshift)
 }
 
 // iowr builds a read-write ioctl request code.
 func iowr(typ, nr, size uintptr) uintptr {
 	const (
-		_IOC_NRBITS    = 8
-		_IOC_TYPEBITS  = 8
-		_IOC_SIZEBITS  = 14
-		_IOC_NRSHIFT   = 0
-		_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
-		_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
-		_IOC_DIRSHIFT  = _IOC_SIZESHIFT + _IOC_SIZEBITS
-		_IOC_READ      = 2
-		_IOC_WRITE     = 1
+		iocNrbits    = 8
+		iocTypebits  = 8
+		iocSizebits  = 14
+		iocNrshift   = 0
+		iocTypeshift = iocNrshift + iocNrbits
+		iocSizeshift = iocTypeshift + iocTypebits
+		iocDirshift  = iocSizeshift + iocSizebits
+		iocRead      = 2
+		iocWrite     = 1
 	)
 
-	return ((_IOC_READ | _IOC_WRITE) << _IOC_DIRSHIFT) | (typ << _IOC_TYPESHIFT) | (nr << _IOC_NRSHIFT) | (size << _IOC_SIZESHIFT)
+	return ((iocRead | iocWrite) << iocDirshift) | (typ << iocTypeshift) | (nr << iocNrshift) | (size << iocSizeshift)
 }
 
 var (
