@@ -158,8 +158,6 @@ func main() {
 
 		// The actual samples read.
 		samples := pcmBuffer.Data[:n]
-		// The number of frames corresponding to the samples read.
-		framesInChunk := uint32(n / int(config.Channels))
 		var dataToWrite any
 
 		// Convert the generic `[]int` from the decoder to the specific typed
@@ -224,7 +222,7 @@ func main() {
 				framesWritten += alsa.PcmBytesToFrames(pcm, uint32(writtenBytes))
 			}
 		} else {
-			writtenFrames, err := pcm.WriteI(dataToWrite, framesInChunk)
+			writtenFrames, err := pcm.Write(dataToWrite)
 			if err != nil {
 				writeErr = err
 			} else {

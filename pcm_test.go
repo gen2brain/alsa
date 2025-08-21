@@ -69,20 +69,16 @@ func TestPcmInvalidBuffers(t *testing.T) {
 	require.NoError(t, err, "Failed to open PCM for invalid buffer tests")
 	defer pcm.Close()
 
-	// Test WriteI with various invalid inputs
-	_, err = pcm.WriteI(nil, 100)
-	assert.Error(t, err, "WriteI with nil buffer should fail")
+	// Test Write with various invalid inputs
+	_, err = pcm.Write(nil)
+	assert.Error(t, err, "Write with nil buffer should fail")
 
-	_, err = pcm.WriteI(123, 100)
-	assert.Error(t, err, "WriteI with non-slice buffer should fail")
+	_, err = pcm.Write(123)
+	assert.Error(t, err, "Write with non-slice buffer should fail")
 
 	var unsupportedSlice []struct{}
-	_, err = pcm.WriteI(unsupportedSlice, 100)
-	assert.Error(t, err, "WriteI with unsupported slice type should fail")
-
-	smallBuffer := make([]int16, 10)
-	_, err = pcm.WriteI(smallBuffer, 20) // Request more frames than buffer holds
-	assert.Error(t, err, "WriteI with buffer smaller than requested frames should fail")
+	_, err = pcm.Write(unsupportedSlice)
+	assert.Error(t, err, "Write with unsupported slice type should fail")
 }
 
 // TestPcmHardware runs all hardware-related tests sequentially to avoid race conditions
@@ -265,7 +261,7 @@ func testPcmStop(t *testing.T) {
 		defer wg.Done()
 		buffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
 		for {
-			err := capturePcm.Read(buffer)
+			_, err := capturePcm.Read(buffer)
 			if err != nil {
 				// An error is expected when the stream is stopped.
 				// This is the signal for the goroutine to exit.
@@ -276,7 +272,7 @@ func testPcmStop(t *testing.T) {
 
 	// Write some data to start the stream. The first write implicitly starts linked streams.
 	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()*2))
-	err = pcm.Write(buffer)
+	_, err = pcm.Write(buffer)
 	require.NoError(t, err)
 
 	// Give the stream a moment to ensure it's fully running.
@@ -357,13 +353,13 @@ func testPcmPlaybackStartup(t *testing.T) {
 		captureBuffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, captureFrames))
 
 		// This read will block until the playback side writes data and the stream starts.
-		_, readErr := capturePcm.ReadI(captureBuffer, captureFrames)
+		_, readErr := capturePcm.Read(captureBuffer)
 
 		// We don't need to check the error here; we just need to unblock the writer.
 		// But for robustness, we check for EBADF or EPIPE, which can happen during teardown.
 		if readErr != nil && (!errors.Is(readErr, syscall.EBADF) && !errors.Is(readErr, syscall.EPIPE)) {
 			// In a real test, we'd probably send this error back to the main thread.
-			t.Logf("capture goroutine ReadI failed: %v", readErr)
+			t.Logf("capture goroutine Read failed: %v", readErr)
 		}
 	}()
 
@@ -372,20 +368,20 @@ func testPcmPlaybackStartup(t *testing.T) {
 	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, frames))
 
 	// This first write should succeed and implicitly start both linked streams.
-	written, err := pcm.WriteI(buffer, frames)
+	written, err := pcm.Write(buffer)
 
 	// The key assertion is that this first write does not fail.
 	// It should print the specific error if it fails, as requested.
 	if err != nil {
-		t.Fatalf("The first WriteI call failed with an error.\nError: %v", err)
+		t.Fatalf("The first Write call failed with an error.\nError: %v", err)
 	}
 
-	require.Equal(t, int(frames), written, "The first WriteI call did not write the expected number of frames.")
+	require.Equal(t, int(frames), written, "The first Write call did not write the expected number of frames.")
 
 	// A second write should also succeed.
-	written, err = pcm.WriteI(buffer, frames)
-	require.NoError(t, err, "The second WriteI call failed.")
-	require.Equal(t, int(frames), written, "The second WriteI call did not write the expected number of frames.")
+	written, err = pcm.Write(buffer)
+	require.NoError(t, err, "The second Write call failed.")
+	require.Equal(t, int(frames), written, "The second Write call did not write the expected number of frames.")
 
 	// Wait for the capture goroutine to complete its read operation.
 	wg.Wait()
@@ -437,8 +433,8 @@ func testPcmWriteiFailsOnCapture(t *testing.T) {
 	defer capturePcm.Close()
 
 	buffer := make([]byte, 128)
-	_, err = capturePcm.WriteI(buffer, alsa.PcmBytesToFrames(capturePcm, uint32(len(buffer))))
-	require.Error(t, err, "expected error when calling WriteI on a capture stream")
+	_, err = capturePcm.Write(buffer)
+	require.Error(t, err, "expected error when calling Write on a capture stream")
 }
 
 func testPcmReadiFailsOnPlayback(t *testing.T) {
@@ -447,9 +443,9 @@ func testPcmReadiFailsOnPlayback(t *testing.T) {
 	defer pcm.Close()
 
 	buffer := make([]byte, 128)
-	_, err = pcm.ReadI(buffer, alsa.PcmBytesToFrames(pcm, uint32(len(buffer))))
+	_, err = pcm.Read(buffer)
 
-	require.Error(t, err, "expected error when calling ReadI on a playback stream")
+	require.Error(t, err, "expected error when calling Read on a playback stream")
 	require.Contains(t, err.Error(), "cannot read from a playback device")
 }
 
@@ -480,7 +476,6 @@ func testPcmWriteiTiming(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		captureBuffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
-		frames := capturePcm.PeriodSize()
 
 		close(readyToRead) // Signal that the reader is about to start its loop
 
@@ -490,7 +485,7 @@ func testPcmWriteiTiming(t *testing.T) {
 				return
 			default:
 				// This will block until the producer (main thread) starts writing.
-				_, err := capturePcm.ReadI(captureBuffer, frames)
+				_, err := capturePcm.Read(captureBuffer)
 				if err != nil {
 					// EBADF is expected if the main test closes the PCM before this goroutine exits.
 					// EPIPE or EBADFD can happen during shutdown or if the stream stops.
@@ -520,21 +515,21 @@ func testPcmWriteiTiming(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < writeCount; i++ {
-		// The first call to WriteI will implicitly start both linked streams.
-		written, err := pcm.WriteI(buffer, frames)
+		// The first call to Write will implicitly start both linked streams.
+		written, err := pcm.Write(buffer)
 		if err != nil {
 			// Allow EPIPE/EBADFD here as it can happen during concurrent tests if the stream stops unexpectedly.
 			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
-				t.Logf("WriteI encountered expected error (EPIPE/EBADFD) on iteration %d, stopping write loop: %v", i, err)
+				t.Logf("Write encountered expected error (EPIPE/EBADFD) on iteration %d, stopping write loop: %v", i, err)
 
 				break
 			}
 
-			t.Fatalf("WriteI failed on iteration %d: %v", i, err)
+			t.Fatalf("Write failed on iteration %d: %v", i, err)
 		}
 
 		if written != int(frames) {
-			t.Fatalf("WriteI wrote %d frames, want %d", written, frames)
+			t.Fatalf("Write wrote %d frames, want %d", written, frames)
 		}
 	}
 
@@ -554,7 +549,7 @@ func testPcmWriteiTiming(t *testing.T) {
 	// Since we are now measuring the full playback time, this assertion should be much more reliable.
 	tolerance := 150.0 // ms
 	if math.Abs(durationMs-expectedDurationMs) > tolerance {
-		t.Logf("WriteI+Drain timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
+		t.Logf("Write+Drain timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
 	}
 }
 
@@ -597,7 +592,6 @@ func testPcmReadiTiming(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		playbackBuffer := make([]byte, alsa.PcmFramesToBytes(playbackPcm, playbackPcm.PeriodSize()))
-		frames := playbackPcm.PeriodSize()
 
 		close(readyToWrite) // Signal that the writer is ready
 
@@ -606,7 +600,7 @@ func testPcmReadiTiming(t *testing.T) {
 			case <-done:
 				return
 			default:
-				_, err := playbackPcm.WriteI(playbackBuffer, frames)
+				_, err := playbackPcm.Write(playbackBuffer)
 				if err != nil {
 					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
 						return
@@ -634,21 +628,21 @@ func testPcmReadiTiming(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < readCount; i++ {
-		// The first call to ReadI will implicitly start both linked streams.
-		read, err := pcm.ReadI(buffer, frames)
+		// The first call to Read will implicitly start both linked streams.
+		read, err := pcm.Read(buffer)
 		if err != nil {
 			// Allow EPIPE/EBADFD here as well.
 			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
-				t.Logf("ReadI encountered expected error (EPIPE/EBADFD) on iteration %d, stopping read loop: %v", i, err)
+				t.Logf("Read encountered expected error (EPIPE/EBADFD) on iteration %d, stopping read loop: %v", i, err)
 
 				break
 			}
 
-			t.Fatalf("ReadI failed on iteration %d: %v", i, err)
+			t.Fatalf("Read failed on iteration %d: %v", i, err)
 		}
 
 		if read != int(frames) {
-			t.Fatalf("ReadI read %d frames, want %d", read, frames)
+			t.Fatalf("Read read %d frames, want %d", read, frames)
 		}
 	}
 
@@ -659,7 +653,7 @@ func testPcmReadiTiming(t *testing.T) {
 
 	tolerance := 150.0 // ms
 	if (durationMs-expectedDurationMs) > tolerance || (expectedDurationMs-durationMs) > tolerance {
-		t.Logf("ReadI timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
+		t.Logf("Read timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
 	}
 }
 
@@ -719,7 +713,7 @@ func testPcmReadWriteSimple(t *testing.T) {
 			case <-done:
 				return
 			default:
-				err := pcmIn.Read(readBuffer)
+				_, err := pcmIn.Read(readBuffer)
 				if err != nil {
 					// EPIPE, EBADF, or EBADFD are expected on shutdown or if the stream stops
 					if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, unix.EBADFD) {
@@ -745,7 +739,7 @@ func testPcmReadWriteSimple(t *testing.T) {
 			case <-done:
 				return
 			default:
-				err := pcmOut.Write(writeBuffer)
+				_, err := pcmOut.Write(writeBuffer)
 				if err != nil {
 					// EPIPE, EBADF, or EBADFD are expected on shutdown or if the stream stops (underrun)
 					if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, unix.EBADFD) {
@@ -1313,7 +1307,6 @@ func testPcmDrain(t *testing.T) {
 		defer wg.Done()
 
 		captureBuffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
-		frames := capturePcm.PeriodSize()
 
 		close(readyToRead)
 
@@ -1322,7 +1315,7 @@ func testPcmDrain(t *testing.T) {
 			case <-done:
 				return
 			default:
-				_, err := capturePcm.ReadI(captureBuffer, frames)
+				_, err := capturePcm.Read(captureBuffer)
 				if err != nil {
 					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) {
 						return
@@ -1346,9 +1339,9 @@ func testPcmDrain(t *testing.T) {
 	frames := bufferSize / 2 // Write half the buffer
 	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, frames))
 
-	written, err := pcm.WriteI(buffer, frames)
+	written, err := pcm.Write(buffer)
 	require.NoError(t, err)
-	require.Equal(t, int(frames), written, "WriteI failed before drain")
+	require.Equal(t, int(frames), written, "Write failed before drain")
 
 	// Drain should block until the data is played.
 	start := time.Now()
@@ -1406,7 +1399,7 @@ func testPcmPause(t *testing.T) {
 				return
 			default:
 				// This call will start the stream and will block if the buffer is full or if the stream is paused.
-				_, err := pcm.WriteI(writeBuf, pcm.PeriodSize())
+				_, err := pcm.Write(writeBuf)
 				if err != nil {
 					// An error (e.g., EPIPE on stop) will cause the goroutine to exit.
 					return
@@ -1425,7 +1418,7 @@ func testPcmPause(t *testing.T) {
 				return
 			default:
 				// This call will block until data is available or the stream is paused.
-				_, err := capturePcm.ReadI(readBuf, capturePcm.PeriodSize())
+				_, err := capturePcm.Read(readBuf)
 				if err != nil {
 					return
 				}
@@ -1600,14 +1593,14 @@ func testPcmLoopback(t *testing.T) {
 						return
 					default:
 						// This call will block until the linked playback stream starts and provides data.
-						read, err := pcmIn.ReadI(buffer, frames)
+						read, err := pcmIn.Read(buffer)
 						if err != nil {
 							// EPIPE means XRUN (overrun), EBADF can happen on close. These are expected during a racy shutdown/teardown.
 							if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, unix.EBADFD) {
 								return
 							}
 
-							setCaptureErr(fmt.Errorf("the ReadI failed: %w", err))
+							setCaptureErr(fmt.Errorf("the Read failed: %w", err))
 
 							return
 						}
@@ -1646,14 +1639,14 @@ func testPcmLoopback(t *testing.T) {
 						return
 					default:
 						generator.Read(buffer)
-						written, err := pcmOut.WriteI(buffer, frames)
+						written, err := pcmOut.Write(buffer)
 						if err != nil {
 							// EPIPE means XRUN (underrun), EBADF can happen on close. These are expected during a racy shutdown/teardown.
 							if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EBADF) || errors.Is(err, unix.EBADFD) {
 								return
 							}
 
-							setPlaybackErr(fmt.Errorf("the WriteI failed on iteration %d: %w", counter, err))
+							setPlaybackErr(fmt.Errorf("the Write failed on iteration %d: %w", counter, err))
 
 							return
 						}

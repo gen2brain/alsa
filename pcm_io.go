@@ -9,18 +9,20 @@ import (
 	"unsafe"
 )
 
-// WriteI writes interleaved audio data to a playback PCM device using an ioctl call.
+// Write writes interleaved audio data to a playback PCM device using an ioctl call.
 // The provided `data` argument must be a slice of a supported numeric type (e.g., []int16, []float32).
 // Returns the number of frames actually written.
-func (p *PCM) WriteI(data any, frames uint32) (int, error) {
+func (p *PCM) Write(data any) (int, error) {
 	if (p.flags & PCM_IN) != 0 {
 		return 0, fmt.Errorf("cannot write to a capture device")
 	}
 
 	byteLen, err := checkSlice(data)
 	if err != nil {
-		return 0, fmt.Errorf("invalid data type for WriteI: %w", err)
+		return 0, fmt.Errorf("invalid data type for Write: %w", err)
 	}
+
+	frames := PcmBytesToFrames(p, byteLen)
 
 	requiredBytes := PcmFramesToBytes(p, frames)
 	if byteLen < requiredBytes {
@@ -28,7 +30,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	}
 
 	if frames == 0 || requiredBytes == 0 {
-		return 0, nil
+		return 0, fmt.Errorf("invalid data for Write: %w", err)
 	}
 
 	defer runtime.KeepAlive(data)
@@ -84,10 +86,10 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	return int(framesWritten), nil
 }
 
-// ReadI reads interleaved audio data from a capture PCM device using an ioctl call.
+// Read reads interleaved audio data from a capture PCM device using an ioctl call.
 // The provided `buffer` must be a slice of a supported numeric type (e.g., []int16, []float32).
 // Returns the number of frames actually read.
-func (p *PCM) ReadI(data any, frames uint32) (int, error) {
+func (p *PCM) Read(data any) (int, error) {
 	if (p.flags & PCM_IN) == 0 {
 		return 0, fmt.Errorf("cannot read from a playback device")
 	}
@@ -98,8 +100,10 @@ func (p *PCM) ReadI(data any, frames uint32) (int, error) {
 
 	byteLen, err := checkSlice(data)
 	if err != nil {
-		return 0, fmt.Errorf("invalid buffer type for ReadI: %w", err)
+		return 0, fmt.Errorf("invalid buffer type for Read: %w", err)
 	}
+
+	frames := PcmBytesToFrames(p, byteLen)
 
 	requiredBytes := PcmFramesToBytes(p, frames)
 	if byteLen < requiredBytes {
@@ -107,7 +111,7 @@ func (p *PCM) ReadI(data any, frames uint32) (int, error) {
 	}
 
 	if frames == 0 || requiredBytes == 0 {
-		return 0, nil
+		return 0, fmt.Errorf("invalid data for Read: %w", err)
 	}
 
 	defer runtime.KeepAlive(data)
@@ -160,50 +164,6 @@ func (p *PCM) ReadI(data any, frames uint32) (int, error) {
 	}
 
 	return int(framesRead), nil
-}
-
-// Write writes audio samples to a PCM device. It calculates the number of frames based on the input slice size and calls WriteI.
-// The provided `data` must be a slice of a supported numeric type (e.g., []int16, []float32).
-func (p *PCM) Write(data any) error {
-	byteLen, err := checkSlice(data)
-	if err != nil {
-		return fmt.Errorf("invalid data type for Write: %w", err)
-	}
-
-	frames := PcmBytesToFrames(p, byteLen)
-
-	ret, err := p.WriteI(data, frames)
-	if err != nil {
-		return err
-	}
-
-	if uint32(ret) != frames {
-		return fmt.Errorf("failed to write all frames: %w", syscall.EIO)
-	}
-
-	return nil
-}
-
-// Read reads audio samples from a PCM device. It calculates the number of frames based on the buffer slice size and calls ReadI.
-// The provided `data` must be a slice of a supported numeric type (e.g., []int16, []float32).
-func (p *PCM) Read(data any) error {
-	byteLen, err := checkSlice(data)
-	if err != nil {
-		return fmt.Errorf("invalid data type for Read: %w", err)
-	}
-
-	frames := PcmBytesToFrames(p, byteLen)
-
-	ret, err := p.ReadI(data, frames)
-	if err != nil {
-		return err
-	}
-
-	if uint32(ret) != frames {
-		return fmt.Errorf("failed to read all frames: %w", syscall.EIO)
-	}
-
-	return nil
 }
 
 // checkSlice validates that the input is a slice of a supported numeric type.

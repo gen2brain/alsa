@@ -147,8 +147,8 @@ func main() {
 			if mmap {
 				read, readErr = pcm.MmapRead(buffer)
 			} else {
-				// For standard I/O ReadI returns frames, so we convert to bytes.
-				framesRead, err := pcm.ReadI(buffer, chunkFrames)
+				// For standard I/O Read returns frames, so we convert to bytes.
+				framesRead, err := pcm.Read(buffer)
 				if err == nil {
 					read = int(alsa.PcmFramesToBytes(pcm, uint32(framesRead)))
 				}
