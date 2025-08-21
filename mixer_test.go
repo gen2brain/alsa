@@ -65,7 +65,7 @@ func TestMixerInvalidParameters(t *testing.T) {
 	assert.Equal(t, "", nilCtl.Name(), "Name on nil ctl should be empty string")
 	assert.NotEqual(t, uint32(0), nilCtl.ID(), "ID on nil ctl should be max_uint")
 	assert.Equal(t, alsa.SNDRV_CTL_ELEM_TYPE_UNKNOWN, nilCtl.Type(), "Type on nil ctl should be UNKNOWN")
-	assert.Equal(t, "UNKNOWN", nilCtl.TypeString(), "TypeString on nil ctl should be UNKNOWN")
+	assert.Equal(t, "<nil>", nilCtl.TypeString(), "TypeString on nil ctl should be UNKNOWN")
 	assert.Equal(t, uint32(0), nilCtl.NumValues(), "NumValues on nil ctl should be 0")
 
 	_, err = nilCtl.Value(0)
