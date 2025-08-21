@@ -58,11 +58,6 @@ func (p *PCM) Write(data any) (int, error) {
 		}
 
 		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
-
-		if xfer.Result > 0 {
-			framesWritten += uint32(xfer.Result)
-		}
-
 		if err != nil {
 			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
 			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
@@ -81,6 +76,8 @@ func (p *PCM) Write(data any) (int, error) {
 
 			return int(framesWritten), fmt.Errorf("ioctl WRITEI_FRAMES failed: %w", err)
 		}
+
+		framesWritten += uint32(xfer.Result)
 	}
 
 	return int(framesWritten), nil
