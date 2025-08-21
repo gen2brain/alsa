@@ -264,7 +264,7 @@ func (p *PCM) SetConfig(config *Config) error {
 		config.Rate = 48000
 		config.PeriodSize = 1024
 		config.PeriodCount = 4
-		config.Format = PCM_FORMAT_S16_LE
+		config.Format = SNDRV_PCM_FORMAT_S16_LE
 		config.StartThreshold = config.PeriodCount * config.PeriodSize
 		config.StopThreshold = config.PeriodCount * config.PeriodSize
 		config.SilenceThreshold = 0
@@ -406,7 +406,7 @@ func (p *PCM) Prepare() error {
 // Start explicitly starts the PCM stream.
 // It ensures the stream is prepared before starting.
 func (p *PCM) Start() error {
-	if p.State() == PCM_STATE_SETUP {
+	if p.State() == SNDRV_PCM_STATE_SETUP {
 		if err := p.Prepare(); err != nil {
 			return err
 		}
@@ -416,7 +416,7 @@ func (p *PCM) Start() error {
 		return err
 	}
 
-	if p.mmapStatus.State != PCM_STATE_RUNNING {
+	if p.mmapStatus.State != SNDRV_PCM_STATE_RUNNING {
 		if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_START, 0); err != nil {
 			return fmt.Errorf("ioctl START failed: %w", err)
 		}
@@ -578,7 +578,7 @@ func (p *PCM) State() PcmState {
 	var status sndPcmStatus
 	if ioctlErr := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_STATUS, uintptr(unsafe.Pointer(&status))); ioctlErr != nil {
 		// If both methods fail, the device is likely unusable or disconnected.
-		return PCM_STATE_DISCONNECTED
+		return SNDRV_PCM_STATE_DISCONNECTED
 	}
 
 	return status.State
@@ -590,11 +590,11 @@ func (p *PCM) checkState() (bool, error) {
 	s := p.State()
 
 	switch s {
-	case PCM_STATE_XRUN:
+	case SNDRV_PCM_STATE_XRUN:
 		return false, fmt.Errorf("stream xrun: %w", syscall.EPIPE)
-	case PCM_STATE_SUSPENDED:
+	case SNDRV_PCM_STATE_SUSPENDED:
 		return false, fmt.Errorf("stream suspended: %w", syscall.ESTRPIPE)
-	case PCM_STATE_DISCONNECTED:
+	case SNDRV_PCM_STATE_DISCONNECTED:
 		return false, fmt.Errorf("device disconnected: %w", syscall.ENODEV)
 	}
 
@@ -607,17 +607,17 @@ func (p *PCM) checkState() (bool, error) {
 	}
 
 	switch status.State {
-	case PCM_STATE_XRUN:
+	case SNDRV_PCM_STATE_XRUN:
 		return false, fmt.Errorf("stream xrun: %w", syscall.EPIPE)
-	case PCM_STATE_SUSPENDED:
+	case SNDRV_PCM_STATE_SUSPENDED:
 		return false, fmt.Errorf("stream suspended: %w", syscall.ESTRPIPE)
-	case PCM_STATE_DISCONNECTED:
+	case SNDRV_PCM_STATE_DISCONNECTED:
 		return false, fmt.Errorf("device disconnected: %w", syscall.ENODEV)
-	case PCM_STATE_OPEN, PCM_STATE_SETUP:
+	case SNDRV_PCM_STATE_OPEN, SNDRV_PCM_STATE_SETUP:
 		// These states are not ready for I/O. Return EBADFD to signal a bad state
 		// that the caller should recover from, rather than treating it as a timeout.
 		return false, unix.EBADFD
-	case PCM_STATE_PREPARED:
+	case SNDRV_PCM_STATE_PREPARED:
 		// For playback, PREPARED means ready to accept data.
 		if (p.flags & PCM_IN) == 0 {
 			return true, nil
@@ -760,17 +760,17 @@ func (p *PCM) syncPtr(flags uint32) error {
 // This reflects the space occupied in memory, so 24-bit formats in 32-bit containers return 32.
 func PcmFormatToBits(f PcmFormat) uint32 {
 	switch f {
-	case PCM_FORMAT_FLOAT64_LE, PCM_FORMAT_FLOAT64_BE:
+	case SNDRV_PCM_FORMAT_FLOAT64_LE, SNDRV_PCM_FORMAT_FLOAT64_BE:
 		return 64
-	case PCM_FORMAT_S32_LE, PCM_FORMAT_S32_BE, PCM_FORMAT_U32_LE, PCM_FORMAT_U32_BE,
-		PCM_FORMAT_FLOAT_LE, PCM_FORMAT_FLOAT_BE,
-		PCM_FORMAT_S24_LE, PCM_FORMAT_S24_BE, PCM_FORMAT_U24_LE, PCM_FORMAT_U24_BE:
+	case SNDRV_PCM_FORMAT_S32_LE, SNDRV_PCM_FORMAT_S32_BE, SNDRV_PCM_FORMAT_U32_LE, SNDRV_PCM_FORMAT_U32_BE,
+		SNDRV_PCM_FORMAT_FLOAT_LE, SNDRV_PCM_FORMAT_FLOAT_BE,
+		SNDRV_PCM_FORMAT_S24_LE, SNDRV_PCM_FORMAT_S24_BE, SNDRV_PCM_FORMAT_U24_LE, SNDRV_PCM_FORMAT_U24_BE:
 		return 32
-	case PCM_FORMAT_S24_3LE, PCM_FORMAT_S24_3BE, PCM_FORMAT_U24_3LE, PCM_FORMAT_U24_3BE:
+	case SNDRV_PCM_FORMAT_S24_3LE, SNDRV_PCM_FORMAT_S24_3BE, SNDRV_PCM_FORMAT_U24_3LE, SNDRV_PCM_FORMAT_U24_3BE:
 		return 24
-	case PCM_FORMAT_S16_LE, PCM_FORMAT_S16_BE, PCM_FORMAT_U16_LE, PCM_FORMAT_U16_BE:
+	case SNDRV_PCM_FORMAT_S16_LE, SNDRV_PCM_FORMAT_S16_BE, SNDRV_PCM_FORMAT_U16_LE, SNDRV_PCM_FORMAT_U16_BE:
 		return 16
-	case PCM_FORMAT_S8, PCM_FORMAT_U8:
+	case SNDRV_PCM_FORMAT_S8, SNDRV_PCM_FORMAT_U8:
 		return 8
 	default:
 		return 0

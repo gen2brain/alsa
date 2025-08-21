@@ -64,7 +64,7 @@ func TestMixerInvalidParameters(t *testing.T) {
 	// Test functions on a nil MixerCtl object
 	assert.Equal(t, "", nilCtl.Name(), "Name on nil ctl should be empty string")
 	assert.NotEqual(t, uint32(0), nilCtl.ID(), "ID on nil ctl should be max_uint")
-	assert.Equal(t, alsa.MIXER_CTL_TYPE_UNKNOWN, nilCtl.Type(), "Type on nil ctl should be UNKNOWN")
+	assert.Equal(t, alsa.SNDRV_CTL_ELEM_TYPE_UNKNOWN, nilCtl.Type(), "Type on nil ctl should be UNKNOWN")
 	assert.Equal(t, "UNKNOWN", nilCtl.TypeString(), "TypeString on nil ctl should be UNKNOWN")
 	assert.Equal(t, uint32(0), nilCtl.NumValues(), "NumValues on nil ctl should be 0")
 
@@ -184,21 +184,21 @@ func testMixerBasicFunctionality(t *testing.T, m *alsa.Mixer) {
 
 		// Test type-specific operations based on a control type
 		switch ctlType {
-		case alsa.MIXER_CTL_TYPE_INT:
+		case alsa.SNDRV_CTL_ELEM_TYPE_INTEGER:
 			if ctl.NumValues() > 0 {
 				_, err := ctl.Value(0)
 				if err != nil {
 					t.Logf("Could not read integer control value (this may be normal): %v", err)
 				}
 			}
-		case alsa.MIXER_CTL_TYPE_BOOL:
+		case alsa.SNDRV_CTL_ELEM_TYPE_BOOLEAN:
 			if ctl.NumValues() > 0 {
 				_, err := ctl.Value(0)
 				if err != nil {
 					t.Logf("Could not read boolean control value (this may be normal): %v", err)
 				}
 			}
-		case alsa.MIXER_CTL_TYPE_ENUM:
+		case alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 			numEnums, err := ctl.NumEnums()
 			if err != nil {
 				t.Logf("Could not get enum count (this may be normal): %v", err)
@@ -327,7 +327,7 @@ func testControlValues(t *testing.T, m *alsa.Mixer) {
 		testOutOfBoundsAccess(t, ctl)
 
 		// Test INT64 functions on non-INT64 controls (expect error)
-		if ctl.Type() != alsa.MIXER_CTL_TYPE_INT64 {
+		if ctl.Type() != alsa.SNDRV_CTL_ELEM_TYPE_INTEGER64 {
 			_, err := ctl.Value64(0)
 			assert.Error(t, err, "Value64 should fail on non-INT64 ctl '%s'", ctl.Name())
 			err = ctl.SetValue64(0, 0)
@@ -339,17 +339,17 @@ func testControlValues(t *testing.T, m *alsa.Mixer) {
 		}
 
 		// Test Get/Set Percent for Integer controls
-		if ctl.Type() == alsa.MIXER_CTL_TYPE_INT {
+		if ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_INTEGER {
 			testIntegerCtl(t, ctl)
 		}
 
 		// Test Get/Set for Enum controls
-		if ctl.Type() == alsa.MIXER_CTL_TYPE_ENUM {
+		if ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 			testEnumCtl(t, ctl)
 		}
 
 		// Test Get/Set for INT64 controls
-		if ctl.Type() == alsa.MIXER_CTL_TYPE_INT64 {
+		if ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_INTEGER64 {
 			testInt64Ctl(t, ctl)
 			foundInt64Ctl = true
 		}
@@ -421,7 +421,7 @@ func testOutOfBoundsAccess(t *testing.T, ctl *alsa.MixerCtl) {
 	err = ctl.SetValue(invalidIndex, 0)
 	assert.Error(t, err, "SetValue() with out-of-bounds index should fail for ctl '%s'", ctl.Name())
 
-	if ctl.Type() == alsa.MIXER_CTL_TYPE_INT {
+	if ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_INTEGER {
 		_, err = ctl.Percent(invalidIndex)
 		assert.Error(t, err, "Percent() with out-of-bounds index should fail for ctl '%s'", ctl.Name())
 
@@ -429,7 +429,7 @@ func testOutOfBoundsAccess(t *testing.T, ctl *alsa.MixerCtl) {
 		assert.Error(t, err, "SetPercent() with out-of-bounds index should fail for ctl '%s'", ctl.Name())
 	}
 
-	if ctl.Type() == alsa.MIXER_CTL_TYPE_ENUM {
+	if ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		_, err := ctl.EnumValueString(invalidIndex)
 		assert.Error(t, err, "EnumValueString() with out-of-bounds index should fail for ctl '%s'", ctl.Name())
 
@@ -628,17 +628,17 @@ func testArrayCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	var originalData any
 
 	switch ctl.Type() {
-	case alsa.MIXER_CTL_TYPE_BOOL, alsa.MIXER_CTL_TYPE_INT, alsa.MIXER_CTL_TYPE_ENUM:
+	case alsa.SNDRV_CTL_ELEM_TYPE_BOOLEAN, alsa.SNDRV_CTL_ELEM_TYPE_INTEGER, alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		var d []int32
 		err := ctl.Array(&d)
 		assert.NoError(t, err)
 		originalData = d
-	case alsa.MIXER_CTL_TYPE_BYTE:
+	case alsa.SNDRV_CTL_ELEM_TYPE_BYTES:
 		var d []byte
 		err := ctl.Array(&d)
 		assert.NoError(t, err)
 		originalData = d
-	case alsa.MIXER_CTL_TYPE_INT64:
+	case alsa.SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		var d []int64
 		err := ctl.Array(&d)
 		assert.NoError(t, err)
@@ -686,7 +686,7 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 	var targetCtl *alsa.MixerCtl
 	for _, ctl := range m.Ctls {
 		isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
-		if isWritable && ctl.Type() == alsa.MIXER_CTL_TYPE_INT && ctl.NumValues() > 0 && strings.Contains(ctl.Name(), "Volume") {
+		if isWritable && ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_INTEGER && ctl.NumValues() > 0 && strings.Contains(ctl.Name(), "Volume") {
 			targetCtl = ctl
 			break
 		}
@@ -696,7 +696,7 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 	if targetCtl == nil {
 		for _, ctl := range m.Ctls {
 			isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
-			if isWritable && ctl.Type() == alsa.MIXER_CTL_TYPE_INT && ctl.NumValues() > 0 {
+			if isWritable && ctl.Type() == alsa.SNDRV_CTL_ELEM_TYPE_INTEGER && ctl.NumValues() > 0 {
 				targetCtl = ctl
 				break
 			}
@@ -870,12 +870,12 @@ func testMixerCtlTypeString(t *testing.T, m *alsa.Mixer) {
 	}
 
 	typeMap := map[alsa.MixerCtlType]string{
-		alsa.MIXER_CTL_TYPE_BOOL:   "BOOL",
-		alsa.MIXER_CTL_TYPE_INT:    "INT",
-		alsa.MIXER_CTL_TYPE_ENUM:   "ENUM",
-		alsa.MIXER_CTL_TYPE_BYTE:   "BYTE",
-		alsa.MIXER_CTL_TYPE_IEC958: "IEC958",
-		alsa.MIXER_CTL_TYPE_INT64:  "INT64",
+		alsa.SNDRV_CTL_ELEM_TYPE_BOOLEAN:    "BOOL",
+		alsa.SNDRV_CTL_ELEM_TYPE_INTEGER:    "INT",
+		alsa.SNDRV_CTL_ELEM_TYPE_ENUMERATED: "ENUM",
+		alsa.SNDRV_CTL_ELEM_TYPE_BYTES:      "BYTE",
+		alsa.SNDRV_CTL_ELEM_TYPE_IEC958:     "IEC958",
+		alsa.SNDRV_CTL_ELEM_TYPE_INTEGER64:  "INT64",
 	}
 
 	for _, ctl := range m.Ctls {

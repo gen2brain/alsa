@@ -6,45 +6,45 @@ package alsa
 type PcmFormat int32
 
 const (
-	PCM_FORMAT_INVALID            PcmFormat = -1
-	PCM_FORMAT_S8                 PcmFormat = 0
-	PCM_FORMAT_U8                 PcmFormat = 1
-	PCM_FORMAT_S16_LE             PcmFormat = 2
-	PCM_FORMAT_S16_BE             PcmFormat = 3
-	PCM_FORMAT_U16_LE             PcmFormat = 4
-	PCM_FORMAT_U16_BE             PcmFormat = 5
-	PCM_FORMAT_S24_LE             PcmFormat = 6
-	PCM_FORMAT_S24_BE             PcmFormat = 7
-	PCM_FORMAT_U24_LE             PcmFormat = 8
-	PCM_FORMAT_U24_BE             PcmFormat = 9
-	PCM_FORMAT_S32_LE             PcmFormat = 10
-	PCM_FORMAT_S32_BE             PcmFormat = 11
-	PCM_FORMAT_U32_LE             PcmFormat = 12
-	PCM_FORMAT_U32_BE             PcmFormat = 13
-	PCM_FORMAT_FLOAT_LE           PcmFormat = 14
-	PCM_FORMAT_FLOAT_BE           PcmFormat = 15
-	PCM_FORMAT_FLOAT64_LE         PcmFormat = 16
-	PCM_FORMAT_FLOAT64_BE         PcmFormat = 17
-	PCM_FORMAT_IEC958_SUBFRAME_LE PcmFormat = 18
-	PCM_FORMAT_IEC958_SUBFRAME_BE PcmFormat = 19
-	PCM_FORMAT_MU_LAW             PcmFormat = 20
-	PCM_FORMAT_A_LAW              PcmFormat = 21
-	PCM_FORMAT_IMA_ADPCM          PcmFormat = 22
-	PCM_FORMAT_MPEG               PcmFormat = 23
-	PCM_FORMAT_GSM                PcmFormat = 24
-	PCM_FORMAT_SPECIAL            PcmFormat = 31
-	PCM_FORMAT_S24_3LE            PcmFormat = 32
-	PCM_FORMAT_S24_3BE            PcmFormat = 33
-	PCM_FORMAT_U24_3LE            PcmFormat = 34
-	PCM_FORMAT_U24_3BE            PcmFormat = 35
-	PCM_FORMAT_S20_3LE            PcmFormat = 36
-	PCM_FORMAT_S20_3BE            PcmFormat = 37
-	PCM_FORMAT_U20_3LE            PcmFormat = 38
-	PCM_FORMAT_U20_3BE            PcmFormat = 39
-	PCM_FORMAT_S18_3LE            PcmFormat = 40
-	PCM_FORMAT_S18_3BE            PcmFormat = 41
-	PCM_FORMAT_U18_3LE            PcmFormat = 42
-	PCM_FORMAT_U18_3BE            PcmFormat = 43
+	SNDRV_PCM_FORMAT_INVALID            PcmFormat = -1
+	SNDRV_PCM_FORMAT_S8                 PcmFormat = 0
+	SNDRV_PCM_FORMAT_U8                 PcmFormat = 1
+	SNDRV_PCM_FORMAT_S16_LE             PcmFormat = 2
+	SNDRV_PCM_FORMAT_S16_BE             PcmFormat = 3
+	SNDRV_PCM_FORMAT_U16_LE             PcmFormat = 4
+	SNDRV_PCM_FORMAT_U16_BE             PcmFormat = 5
+	SNDRV_PCM_FORMAT_S24_LE             PcmFormat = 6
+	SNDRV_PCM_FORMAT_S24_BE             PcmFormat = 7
+	SNDRV_PCM_FORMAT_U24_LE             PcmFormat = 8
+	SNDRV_PCM_FORMAT_U24_BE             PcmFormat = 9
+	SNDRV_PCM_FORMAT_S32_LE             PcmFormat = 10
+	SNDRV_PCM_FORMAT_S32_BE             PcmFormat = 11
+	SNDRV_PCM_FORMAT_U32_LE             PcmFormat = 12
+	SNDRV_PCM_FORMAT_U32_BE             PcmFormat = 13
+	SNDRV_PCM_FORMAT_FLOAT_LE           PcmFormat = 14
+	SNDRV_PCM_FORMAT_FLOAT_BE           PcmFormat = 15
+	SNDRV_PCM_FORMAT_FLOAT64_LE         PcmFormat = 16
+	SNDRV_PCM_FORMAT_FLOAT64_BE         PcmFormat = 17
+	SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE PcmFormat = 18
+	SNDRV_PCM_FORMAT_IEC958_SUBFRAME_BE PcmFormat = 19
+	SNDRV_PCM_FORMAT_MU_LAW             PcmFormat = 20
+	SNDRV_PCM_FORMAT_A_LAW              PcmFormat = 21
+	SNDRV_PCM_FORMAT_IMA_ADPCM          PcmFormat = 22
+	SNDRV_PCM_FORMAT_MPEG               PcmFormat = 23
+	SNDRV_PCM_FORMAT_GSM                PcmFormat = 24
+	SNDRV_PCM_FORMAT_SPECIAL            PcmFormat = 31
+	SNDRV_PCM_FORMAT_S24_3LE            PcmFormat = 32
+	SNDRV_PCM_FORMAT_S24_3BE            PcmFormat = 33
+	SNDRV_PCM_FORMAT_U24_3LE            PcmFormat = 34
+	SNDRV_PCM_FORMAT_U24_3BE            PcmFormat = 35
+	SNDRV_PCM_FORMAT_S20_3LE            PcmFormat = 36
+	SNDRV_PCM_FORMAT_S20_3BE            PcmFormat = 37
+	SNDRV_PCM_FORMAT_U20_3LE            PcmFormat = 38
+	SNDRV_PCM_FORMAT_U20_3BE            PcmFormat = 39
+	SNDRV_PCM_FORMAT_S18_3LE            PcmFormat = 40
+	SNDRV_PCM_FORMAT_S18_3BE            PcmFormat = 41
+	SNDRV_PCM_FORMAT_U18_3LE            PcmFormat = 42
+	SNDRV_PCM_FORMAT_U18_3BE            PcmFormat = 43
 )
 
 // PcmState defines the current state of a PCM stream.
@@ -52,15 +52,15 @@ const (
 type PcmState int32
 
 const (
-	PCM_STATE_OPEN         PcmState = 0 // Stream is open.
-	PCM_STATE_SETUP        PcmState = 1 // Stream has a setup.
-	PCM_STATE_PREPARED     PcmState = 2 // Stream is ready to start.
-	PCM_STATE_RUNNING      PcmState = 3 // Stream is running.
-	PCM_STATE_XRUN         PcmState = 4 // Stream reached an underrun or overrun.
-	PCM_STATE_DRAINING     PcmState = 5 // Stream is draining.
-	PCM_STATE_PAUSED       PcmState = 6 // Stream is paused.
-	PCM_STATE_SUSPENDED    PcmState = 7 // Hardware is suspended.
-	PCM_STATE_DISCONNECTED PcmState = 8 // Hardware is disconnected.
+	SNDRV_PCM_STATE_OPEN         PcmState = 0 // Stream is open.
+	SNDRV_PCM_STATE_SETUP        PcmState = 1 // Stream has a setup.
+	SNDRV_PCM_STATE_PREPARED     PcmState = 2 // Stream is ready to start.
+	SNDRV_PCM_STATE_RUNNING      PcmState = 3 // Stream is running.
+	SNDRV_PCM_STATE_XRUN         PcmState = 4 // Stream reached an underrun or overrun.
+	SNDRV_PCM_STATE_DRAINING     PcmState = 5 // Stream is draining.
+	SNDRV_PCM_STATE_PAUSED       PcmState = 6 // Stream is paused.
+	SNDRV_PCM_STATE_SUSPENDED    PcmState = 7 // Hardware is suspended.
+	SNDRV_PCM_STATE_DISCONNECTED PcmState = 8 // Hardware is disconnected.
 )
 
 // PcmFlag defines flags for opening a PCM stream.
@@ -93,13 +93,14 @@ const (
 type MixerCtlType int32
 
 const (
-	MIXER_CTL_TYPE_BOOL    MixerCtlType = 0
-	MIXER_CTL_TYPE_INT     MixerCtlType = 1
-	MIXER_CTL_TYPE_ENUM    MixerCtlType = 2
-	MIXER_CTL_TYPE_BYTE    MixerCtlType = 3
-	MIXER_CTL_TYPE_IEC958  MixerCtlType = 4
-	MIXER_CTL_TYPE_INT64   MixerCtlType = 5
-	MIXER_CTL_TYPE_UNKNOWN MixerCtlType = -1
+	SNDRV_CTL_ELEM_TYPE_NONE       MixerCtlType = 0
+	SNDRV_CTL_ELEM_TYPE_BOOLEAN    MixerCtlType = 1
+	SNDRV_CTL_ELEM_TYPE_INTEGER    MixerCtlType = 2
+	SNDRV_CTL_ELEM_TYPE_ENUMERATED MixerCtlType = 3
+	SNDRV_CTL_ELEM_TYPE_BYTES      MixerCtlType = 4
+	SNDRV_CTL_ELEM_TYPE_IEC958     MixerCtlType = 5
+	SNDRV_CTL_ELEM_TYPE_INTEGER64  MixerCtlType = 6
+	SNDRV_CTL_ELEM_TYPE_UNKNOWN    MixerCtlType = -1
 )
 
 // CtlAccessFlag defines the access permissions for a mixer control.
@@ -225,44 +226,44 @@ var PcmParamAccessNames = []string{
 // PcmParamFormatNames provides human-readable names for PCM formats.
 // The index corresponds to the PcmFormat (SNDRV_PCM_FORMAT_*) value.
 var PcmParamFormatNames = map[PcmFormat]string{
-	PCM_FORMAT_S8:                 "S8",
-	PCM_FORMAT_U8:                 "U8",
-	PCM_FORMAT_S16_LE:             "S16_LE",
-	PCM_FORMAT_S16_BE:             "S16_BE",
-	PCM_FORMAT_U16_LE:             "U16_LE",
-	PCM_FORMAT_U16_BE:             "U16_BE",
-	PCM_FORMAT_S24_LE:             "S24_LE",
-	PCM_FORMAT_S24_BE:             "S24_BE",
-	PCM_FORMAT_U24_LE:             "U24_LE",
-	PCM_FORMAT_U24_BE:             "U24_BE",
-	PCM_FORMAT_S32_LE:             "S32_LE",
-	PCM_FORMAT_S32_BE:             "S32_BE",
-	PCM_FORMAT_U32_LE:             "U32_LE",
-	PCM_FORMAT_U32_BE:             "U32_BE",
-	PCM_FORMAT_FLOAT_LE:           "FLOAT_LE",
-	PCM_FORMAT_FLOAT_BE:           "FLOAT_BE",
-	PCM_FORMAT_FLOAT64_LE:         "FLOAT64_LE",
-	PCM_FORMAT_FLOAT64_BE:         "FLOAT64_BE",
-	PCM_FORMAT_IEC958_SUBFRAME_LE: "IEC958_SUBFRAME_LE",
-	PCM_FORMAT_IEC958_SUBFRAME_BE: "IEC958_SUBFRAME_BE",
-	PCM_FORMAT_MU_LAW:             "MU_LAW",
-	PCM_FORMAT_A_LAW:              "A_LAW",
-	PCM_FORMAT_IMA_ADPCM:          "IMA_ADPCM",
-	PCM_FORMAT_MPEG:               "MPEG",
-	PCM_FORMAT_GSM:                "GSM",
-	PCM_FORMAT_SPECIAL:            "SPECIAL",
-	PCM_FORMAT_S24_3LE:            "S24_3LE",
-	PCM_FORMAT_S24_3BE:            "S24_3BE",
-	PCM_FORMAT_U24_3LE:            "U24_3LE",
-	PCM_FORMAT_U24_3BE:            "U24_3BE",
-	PCM_FORMAT_S20_3LE:            "S20_3LE",
-	PCM_FORMAT_S20_3BE:            "S20_3BE",
-	PCM_FORMAT_U20_3LE:            "U20_3LE",
-	PCM_FORMAT_U20_3BE:            "U20_3BE",
-	PCM_FORMAT_S18_3LE:            "S18_3LE",
-	PCM_FORMAT_S18_3BE:            "S18_3BE",
-	PCM_FORMAT_U18_3LE:            "U18_3LE",
-	PCM_FORMAT_U18_3BE:            "U18_3BE",
+	SNDRV_PCM_FORMAT_S8:                 "S8",
+	SNDRV_PCM_FORMAT_U8:                 "U8",
+	SNDRV_PCM_FORMAT_S16_LE:             "S16_LE",
+	SNDRV_PCM_FORMAT_S16_BE:             "S16_BE",
+	SNDRV_PCM_FORMAT_U16_LE:             "U16_LE",
+	SNDRV_PCM_FORMAT_U16_BE:             "U16_BE",
+	SNDRV_PCM_FORMAT_S24_LE:             "S24_LE",
+	SNDRV_PCM_FORMAT_S24_BE:             "S24_BE",
+	SNDRV_PCM_FORMAT_U24_LE:             "U24_LE",
+	SNDRV_PCM_FORMAT_U24_BE:             "U24_BE",
+	SNDRV_PCM_FORMAT_S32_LE:             "S32_LE",
+	SNDRV_PCM_FORMAT_S32_BE:             "S32_BE",
+	SNDRV_PCM_FORMAT_U32_LE:             "U32_LE",
+	SNDRV_PCM_FORMAT_U32_BE:             "U32_BE",
+	SNDRV_PCM_FORMAT_FLOAT_LE:           "FLOAT_LE",
+	SNDRV_PCM_FORMAT_FLOAT_BE:           "FLOAT_BE",
+	SNDRV_PCM_FORMAT_FLOAT64_LE:         "FLOAT64_LE",
+	SNDRV_PCM_FORMAT_FLOAT64_BE:         "FLOAT64_BE",
+	SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE: "IEC958_SUBFRAME_LE",
+	SNDRV_PCM_FORMAT_IEC958_SUBFRAME_BE: "IEC958_SUBFRAME_BE",
+	SNDRV_PCM_FORMAT_MU_LAW:             "MU_LAW",
+	SNDRV_PCM_FORMAT_A_LAW:              "A_LAW",
+	SNDRV_PCM_FORMAT_IMA_ADPCM:          "IMA_ADPCM",
+	SNDRV_PCM_FORMAT_MPEG:               "MPEG",
+	SNDRV_PCM_FORMAT_GSM:                "GSM",
+	SNDRV_PCM_FORMAT_SPECIAL:            "SPECIAL",
+	SNDRV_PCM_FORMAT_S24_3LE:            "S24_3LE",
+	SNDRV_PCM_FORMAT_S24_3BE:            "S24_3BE",
+	SNDRV_PCM_FORMAT_U24_3LE:            "U24_3LE",
+	SNDRV_PCM_FORMAT_U24_3BE:            "U24_3BE",
+	SNDRV_PCM_FORMAT_S20_3LE:            "S20_3LE",
+	SNDRV_PCM_FORMAT_S20_3BE:            "S20_3BE",
+	SNDRV_PCM_FORMAT_U20_3LE:            "U20_3LE",
+	SNDRV_PCM_FORMAT_U20_3BE:            "U20_3BE",
+	SNDRV_PCM_FORMAT_S18_3LE:            "S18_3LE",
+	SNDRV_PCM_FORMAT_S18_3BE:            "S18_3BE",
+	SNDRV_PCM_FORMAT_U18_3LE:            "U18_3LE",
+	SNDRV_PCM_FORMAT_U18_3BE:            "U18_3BE",
 }
 
 // PcmParamSubformatNames provides human-readable names for PCM subformats.

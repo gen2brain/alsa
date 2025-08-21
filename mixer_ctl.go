@@ -71,16 +71,16 @@ func (ctl *MixerCtl) Access() uint32 {
 // Type returns the data type of the control's value.
 func (ctl *MixerCtl) Type() MixerCtlType {
 	if ctl == nil {
-		return MIXER_CTL_TYPE_UNKNOWN
+		return SNDRV_CTL_ELEM_TYPE_UNKNOWN
 	}
 
 	// This is a workaround for drivers that report a control as ENUMERATED
 	// but provide no item names. These are often misreported INTEGER controls.
 	// A non-zero `max` in the integer union is a strong indicator.
-	if MixerCtlType(ctl.info.Typ) == MIXER_CTL_TYPE_ENUM {
+	if MixerCtlType(ctl.info.Typ) == SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		intInfo := (*integer)(unsafe.Pointer(&ctl.info.Value[0]))
 		if intInfo.Max != 0 {
-			return MIXER_CTL_TYPE_INT
+			return SNDRV_CTL_ELEM_TYPE_INTEGER
 		}
 	}
 
@@ -94,17 +94,17 @@ func (ctl *MixerCtl) TypeString() string {
 	}
 
 	switch ctl.Type() {
-	case MIXER_CTL_TYPE_BOOL:
+	case SNDRV_CTL_ELEM_TYPE_BOOLEAN:
 		return "BOOL"
-	case MIXER_CTL_TYPE_INT:
+	case SNDRV_CTL_ELEM_TYPE_INTEGER:
 		return "INT"
-	case MIXER_CTL_TYPE_ENUM:
+	case SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		return "ENUM"
-	case MIXER_CTL_TYPE_BYTE:
+	case SNDRV_CTL_ELEM_TYPE_BYTES:
 		return "BYTE"
-	case MIXER_CTL_TYPE_IEC958:
+	case SNDRV_CTL_ELEM_TYPE_IEC958:
 		return "IEC958"
-	case MIXER_CTL_TYPE_INT64:
+	case SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		return "INT64"
 	default:
 		return "UNKNOWN"
@@ -153,11 +153,11 @@ func (ctl *MixerCtl) Value(index uint) (int, error) {
 
 	valuePtr := unsafe.Pointer(&val.Value[0])
 	switch ctl.Type() {
-	case MIXER_CTL_TYPE_BOOL, MIXER_CTL_TYPE_INT, MIXER_CTL_TYPE_ENUM:
+	case SNDRV_CTL_ELEM_TYPE_BOOLEAN, SNDRV_CTL_ELEM_TYPE_INTEGER, SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		intValues := unsafe.Slice((*int32)(valuePtr), count)
 
 		return int(intValues[index]), nil
-	case MIXER_CTL_TYPE_BYTE:
+	case SNDRV_CTL_ELEM_TYPE_BYTES:
 		byteValues := unsafe.Slice((*byte)(valuePtr), count)
 
 		return int(byteValues[index]), nil
@@ -188,10 +188,10 @@ func (ctl *MixerCtl) SetValue(index uint, value int) error {
 
 	valuePtr := unsafe.Pointer(&val.Value[0])
 	switch ctl.Type() {
-	case MIXER_CTL_TYPE_BOOL, MIXER_CTL_TYPE_INT, MIXER_CTL_TYPE_ENUM:
+	case SNDRV_CTL_ELEM_TYPE_BOOLEAN, SNDRV_CTL_ELEM_TYPE_INTEGER, SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		intValues := unsafe.Slice((*int32)(valuePtr), count)
 		intValues[index] = int32(value)
-	case MIXER_CTL_TYPE_BYTE:
+	case SNDRV_CTL_ELEM_TYPE_BYTES:
 		byteValues := unsafe.Slice((*byte)(valuePtr), count)
 		byteValues[index] = byte(value)
 	default:
@@ -207,7 +207,7 @@ func (ctl *MixerCtl) Value64(index uint) (int64, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT64 {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER64 {
 		return 0, fmt.Errorf("not an INT64 control")
 	}
 
@@ -234,7 +234,7 @@ func (ctl *MixerCtl) SetValue64(index uint, value int64) error {
 		return fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT64 {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER64 {
 		return fmt.Errorf("not an INT64 control")
 	}
 
@@ -259,10 +259,10 @@ func (ctl *MixerCtl) SetValue64(index uint, value int64) error {
 
 // Array reads the entire multi-value array of a control.
 // `array` must be a pointer to a slice of a type compatible with the control's type:
-//   - MIXER_CTL_TYPE_BOOL, _INT, _ENUM: *[]int32
-//   - MIXER_CTL_TYPE_BYTE: *[]byte
-//   - MIXER_CTL_TYPE_INT64: *[]int64
-//   - MIXER_CTL_TYPE_IEC958: *[]SndAesEbu (typically only one value)
+//   - SNDRV_CTL_ELEM_TYPE_BOOLEAN, _INT, _ENUM: *[]int32
+//   - SNDRV_CTL_ELEM_TYPE_BYTES: *[]byte
+//   - SNDRV_CTL_ELEM_TYPE_INTEGER64: *[]int64
+//   - SNDRV_CTL_ELEM_TYPE_IEC958: *[]SndAesEbu (typically only one value)
 func (ctl *MixerCtl) Array(array any) error {
 	if ctl == nil {
 		return fmt.Errorf("MixerCtl is nil")
@@ -285,7 +285,7 @@ func (ctl *MixerCtl) Array(array any) error {
 	count := int(ctl.info.Count)
 
 	// Handle TLV bytes separately as it uses a different ioctl
-	if ctl.Type() == MIXER_CTL_TYPE_BYTE && ctl.IsAccessTLVRw() {
+	if ctl.Type() == SNDRV_CTL_ELEM_TYPE_BYTES && ctl.IsAccessTLVRw() {
 		if slice.Type().Elem().Kind() != reflect.Uint8 {
 			return fmt.Errorf("type mismatch: expected *[]byte for TLV control")
 		}
@@ -321,7 +321,7 @@ func (ctl *MixerCtl) Array(array any) error {
 
 	// Switch on the actual control type
 	switch ctl.Type() {
-	case MIXER_CTL_TYPE_BOOL, MIXER_CTL_TYPE_INT, MIXER_CTL_TYPE_ENUM:
+	case SNDRV_CTL_ELEM_TYPE_BOOLEAN, SNDRV_CTL_ELEM_TYPE_INTEGER, SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		if slice.Type().Elem().Kind() != reflect.Int32 {
 			return fmt.Errorf("type mismatch: expected *[]int32 for control type %s", ctl.TypeString())
 		}
@@ -329,7 +329,7 @@ func (ctl *MixerCtl) Array(array any) error {
 		src := unsafe.Slice((*int32)(valuePtr), count)
 		reflect.Copy(resultSlice, reflect.ValueOf(src))
 
-	case MIXER_CTL_TYPE_BYTE:
+	case SNDRV_CTL_ELEM_TYPE_BYTES:
 		if slice.Type().Elem().Kind() != reflect.Uint8 {
 			return fmt.Errorf("type mismatch: expected *[]byte for BYTE control")
 		}
@@ -337,7 +337,7 @@ func (ctl *MixerCtl) Array(array any) error {
 		src := unsafe.Slice((*byte)(valuePtr), count)
 		reflect.Copy(resultSlice, reflect.ValueOf(src))
 
-	case MIXER_CTL_TYPE_INT64:
+	case SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		if slice.Type().Elem().Kind() != reflect.Int64 {
 			return fmt.Errorf("type mismatch: expected *[]int64 for INT64 control")
 		}
@@ -345,7 +345,7 @@ func (ctl *MixerCtl) Array(array any) error {
 		src := unsafe.Slice((*int64)(valuePtr), count)
 		reflect.Copy(resultSlice, reflect.ValueOf(src))
 
-	case MIXER_CTL_TYPE_IEC958:
+	case SNDRV_CTL_ELEM_TYPE_IEC958:
 		if slice.Type().Elem() != reflect.TypeOf(SndAesEbu{}) {
 			return fmt.Errorf("type mismatch: expected *[]SndAesEbu for IEC958 control")
 		}
@@ -364,10 +364,10 @@ func (ctl *MixerCtl) Array(array any) error {
 
 // SetArray writes an entire multi-value array to a control.
 // `array` must be a slice of a type compatible with the control's type:
-//   - MIXER_CTL_TYPE_BOOL, _INT, _ENUM: []int32
-//   - MIXER_CTL_TYPE_BYTE: []byte
-//   - MIXER_CTL_TYPE_INT64: []int64
-//   - MIXER_CTL_TYPE_IEC958: []SndAesEbu
+//   - SNDRV_CTL_ELEM_TYPE_BOOLEAN, _INT, _ENUM: []int32
+//   - SNDRV_CTL_ELEM_TYPE_BYTES: []byte
+//   - SNDRV_CTL_ELEM_TYPE_INTEGER64: []int64
+//   - SNDRV_CTL_ELEM_TYPE_IEC958: []SndAesEbu
 func (ctl *MixerCtl) SetArray(array any) error {
 	if ctl == nil {
 		return fmt.Errorf("MixerCtl is nil")
@@ -388,7 +388,7 @@ func (ctl *MixerCtl) SetArray(array any) error {
 	}
 
 	// Handle TLV bytes separately as it uses a different ioctl
-	if ctl.Type() == MIXER_CTL_TYPE_BYTE && ctl.IsAccessTLVRw() {
+	if ctl.Type() == SNDRV_CTL_ELEM_TYPE_BYTES && ctl.IsAccessTLVRw() {
 		if slice.Type().Elem().Kind() != reflect.Uint8 {
 			return fmt.Errorf("type mismatch: expected []byte for TLV control")
 		}
@@ -411,7 +411,7 @@ func (ctl *MixerCtl) SetArray(array any) error {
 	valuePtr := unsafe.Pointer(&val.Value[0])
 
 	switch ctl.Type() {
-	case MIXER_CTL_TYPE_BOOL, MIXER_CTL_TYPE_INT, MIXER_CTL_TYPE_ENUM:
+	case SNDRV_CTL_ELEM_TYPE_BOOLEAN, SNDRV_CTL_ELEM_TYPE_INTEGER, SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		if slice.Type().Elem().Kind() != reflect.Int32 {
 			return fmt.Errorf("type mismatch: expected []int32 for control type %s", ctl.TypeString())
 		}
@@ -419,7 +419,7 @@ func (ctl *MixerCtl) SetArray(array any) error {
 		dest := unsafe.Slice((*int32)(valuePtr), count)
 		reflect.Copy(reflect.ValueOf(dest), slice)
 
-	case MIXER_CTL_TYPE_BYTE:
+	case SNDRV_CTL_ELEM_TYPE_BYTES:
 		if slice.Type().Elem().Kind() != reflect.Uint8 {
 			return fmt.Errorf("type mismatch: expected []byte for BYTE control")
 		}
@@ -427,7 +427,7 @@ func (ctl *MixerCtl) SetArray(array any) error {
 		dest := unsafe.Slice((*byte)(valuePtr), count)
 		reflect.Copy(reflect.ValueOf(dest), slice)
 
-	case MIXER_CTL_TYPE_INT64:
+	case SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		if slice.Type().Elem().Kind() != reflect.Int64 {
 			return fmt.Errorf("type mismatch: expected []int64 for INT64 control")
 		}
@@ -435,7 +435,7 @@ func (ctl *MixerCtl) SetArray(array any) error {
 		dest := unsafe.Slice((*int64)(valuePtr), count)
 		reflect.Copy(reflect.ValueOf(dest), slice)
 
-	case MIXER_CTL_TYPE_IEC958:
+	case SNDRV_CTL_ELEM_TYPE_IEC958:
 		if slice.Type().Elem() != reflect.TypeOf(SndAesEbu{}) {
 			return fmt.Errorf("type mismatch: expected []SndAesEbu for IEC958 control")
 		}
@@ -456,7 +456,7 @@ func (ctl *MixerCtl) Percent(index uint) (int, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER {
 		return 0, fmt.Errorf("not an integer control")
 	}
 
@@ -492,7 +492,7 @@ func (ctl *MixerCtl) SetPercent(index uint, percent int) error {
 		return fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER {
 		return fmt.Errorf("not an integer control")
 	}
 
@@ -525,7 +525,7 @@ func (ctl *MixerCtl) RangeMin() (int, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER {
 		return 0, fmt.Errorf("not an integer control")
 	}
 
@@ -540,7 +540,7 @@ func (ctl *MixerCtl) RangeMax() (int, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER {
 		return 0, fmt.Errorf("not an integer control")
 	}
 
@@ -555,7 +555,7 @@ func (ctl *MixerCtl) RangeMin64() (int64, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT64 {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER64 {
 		return 0, fmt.Errorf("not an int64 control")
 	}
 
@@ -570,7 +570,7 @@ func (ctl *MixerCtl) RangeMax64() (int64, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_INT64 {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_INTEGER64 {
 		return 0, fmt.Errorf("not an int64 control")
 	}
 
@@ -585,7 +585,7 @@ func (ctl *MixerCtl) NumEnums() (uint32, error) {
 		return 0, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_ENUM {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		return 0, fmt.Errorf("not an enumerated control")
 	}
 
@@ -600,7 +600,7 @@ func (ctl *MixerCtl) EnumString(enumID uint) (string, error) {
 		return "", fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_ENUM {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		return "", fmt.Errorf("not an enumerated control")
 	}
 
@@ -624,7 +624,7 @@ func (ctl *MixerCtl) EnumValueString(index uint) (string, error) {
 		return "", fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_ENUM {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		return "", fmt.Errorf("not an enumerated control")
 	}
 
@@ -648,7 +648,7 @@ func (ctl *MixerCtl) AllEnumStrings() ([]string, error) {
 		return nil, fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_ENUM {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		return nil, fmt.Errorf("not an enumerated control")
 	}
 
@@ -671,7 +671,7 @@ func (ctl *MixerCtl) SetEnumByString(value string) error {
 		return fmt.Errorf("MixerCtl is nil")
 	}
 
-	if ctl.Type() != MIXER_CTL_TYPE_ENUM {
+	if ctl.Type() != SNDRV_CTL_ELEM_TYPE_ENUMERATED {
 		return fmt.Errorf("not an enumerated control")
 	}
 
@@ -779,7 +779,7 @@ func (ctl *MixerCtl) String() string {
 	kv("Access", "%s", strings.Join(accessFlags, ", "))
 
 	switch ctl.Type() {
-	case MIXER_CTL_TYPE_INT:
+	case SNDRV_CTL_ELEM_TYPE_INTEGER:
 		minVal, errMin := ctl.RangeMin()
 		maxVal, errMax := ctl.RangeMax()
 		if errMin == nil && errMax == nil {
@@ -796,7 +796,7 @@ func (ctl *MixerCtl) String() string {
 			}
 		}
 
-	case MIXER_CTL_TYPE_BOOL:
+	case SNDRV_CTL_ELEM_TYPE_BOOLEAN:
 		for i := uint(0); i < uint(ctl.NumValues()); i++ {
 			val, err := ctl.Value(i)
 			if err == nil {
@@ -810,7 +810,7 @@ func (ctl *MixerCtl) String() string {
 			}
 		}
 
-	case MIXER_CTL_TYPE_ENUM:
+	case SNDRV_CTL_ELEM_TYPE_ENUMERATED:
 		numEnums, err := ctl.NumEnums()
 		if err == nil {
 			kv("Enum Items", "%d", numEnums)
@@ -831,7 +831,7 @@ func (ctl *MixerCtl) String() string {
 			}
 		}
 
-	case MIXER_CTL_TYPE_INT64:
+	case SNDRV_CTL_ELEM_TYPE_INTEGER64:
 		minVal, errMin := ctl.RangeMin64()
 		maxVal, errMax := ctl.RangeMax64()
 		if errMin == nil && errMax == nil {
@@ -847,7 +847,7 @@ func (ctl *MixerCtl) String() string {
 			}
 		}
 
-	case MIXER_CTL_TYPE_BYTE:
+	case SNDRV_CTL_ELEM_TYPE_BYTES:
 		// Reading byte arrays might not always be useful to display, but we can indicate that it's a byte control.
 		b.WriteString(fmt.Sprintf("Note          : Use .Array() to read byte data.\n"))
 	}

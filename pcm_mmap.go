@@ -24,7 +24,7 @@ func (p *PCM) AvailUpdate() (int, error) {
 	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_HWSYNC); err != nil {
 		// On error, check the stream state. If it's an XRUN, the pointers are invalid.
 		// For playback, the buffer is empty (avail = buffer_size). For capture, no frames are readable.
-		if p.State() == PCM_STATE_XRUN {
+		if p.State() == SNDRV_PCM_STATE_XRUN {
 			if (p.flags & PCM_IN) != 0 {
 				return 0, syscall.EPIPE // Capture: No frames available
 			}
@@ -105,7 +105,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 		// Ensure the stream is prepared if it was stopped (e.g., via linked recovery) or not yet prepared.
 		s := p.State()
-		if s == PCM_STATE_SETUP || s == PCM_STATE_OPEN {
+		if s == SNDRV_PCM_STATE_SETUP || s == SNDRV_PCM_STATE_OPEN {
 			if err := p.Prepare(); err != nil {
 				return offset, err
 			}
@@ -184,7 +184,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 		// If the stream is in the PREPARED state after we've committed new frames,
 		// it's our responsibility to start it.
-		if p.State() == PCM_STATE_PREPARED {
+		if p.State() == SNDRV_PCM_STATE_PREPARED {
 			if err := p.Start(); err != nil {
 				// EBADFD is not a fatal error here. It indicates the stream was
 				// started by another thread or the kernel in the small window
@@ -221,7 +221,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 	// Ensure the stream is prepared if it was stopped (e.g., via linked recovery) or not yet prepared.
 	s := p.State()
-	if s == PCM_STATE_SETUP || s == PCM_STATE_OPEN {
+	if s == SNDRV_PCM_STATE_SETUP || s == SNDRV_PCM_STATE_OPEN {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
@@ -291,7 +291,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 					return offset, syscall.EAGAIN
 				}
 
-				if p.State() == PCM_STATE_SETUP {
+				if p.State() == SNDRV_PCM_STATE_SETUP {
 					if err := p.Prepare(); err != nil {
 						return offset, err
 					}
@@ -348,16 +348,16 @@ func (p *PCM) MmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 	currentState := p.State()
 
 	switch currentState {
-	case PCM_STATE_XRUN:
+	case SNDRV_PCM_STATE_XRUN:
 		err = syscall.EPIPE
 		return
-	case PCM_STATE_OPEN, PCM_STATE_SETUP, PCM_STATE_DRAINING:
+	case SNDRV_PCM_STATE_OPEN, SNDRV_PCM_STATE_SETUP, SNDRV_PCM_STATE_DRAINING:
 		err = unix.EBADFD
 		return
-	case PCM_STATE_SUSPENDED:
+	case SNDRV_PCM_STATE_SUSPENDED:
 		err = syscall.ESTRPIPE
 		return
-	case PCM_STATE_DISCONNECTED:
+	case SNDRV_PCM_STATE_DISCONNECTED:
 		err = syscall.ENODEV
 		return
 	}

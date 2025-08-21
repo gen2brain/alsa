@@ -31,26 +31,26 @@ var (
 		Rate:        48000,
 		PeriodSize:  1024,
 		PeriodCount: 4,
-		Format:      alsa.PCM_FORMAT_S16_LE,
+		Format:      alsa.SNDRV_PCM_FORMAT_S16_LE,
 	}
 )
 
 func TestPcmFormatToBits(t *testing.T) {
 	testCases := map[alsa.PcmFormat]uint32{
-		alsa.PCM_FORMAT_INVALID:    0,
-		alsa.PCM_FORMAT_S16_LE:     16,
-		alsa.PCM_FORMAT_S32_LE:     32,
-		alsa.PCM_FORMAT_S8:         8,
-		alsa.PCM_FORMAT_S24_LE:     32, // 24-bit stored in 32-bit container
-		alsa.PCM_FORMAT_S24_3LE:    24, // Packed 24-bit
-		alsa.PCM_FORMAT_S16_BE:     16,
-		alsa.PCM_FORMAT_S24_BE:     32,
-		alsa.PCM_FORMAT_S24_3BE:    24,
-		alsa.PCM_FORMAT_S32_BE:     32,
-		alsa.PCM_FORMAT_FLOAT_LE:   32,
-		alsa.PCM_FORMAT_FLOAT_BE:   32,
-		alsa.PCM_FORMAT_FLOAT64_LE: 64,
-		alsa.PCM_FORMAT_FLOAT64_BE: 64,
+		alsa.SNDRV_PCM_FORMAT_INVALID:    0,
+		alsa.SNDRV_PCM_FORMAT_S16_LE:     16,
+		alsa.SNDRV_PCM_FORMAT_S32_LE:     32,
+		alsa.SNDRV_PCM_FORMAT_S8:         8,
+		alsa.SNDRV_PCM_FORMAT_S24_LE:     32, // 24-bit stored in 32-bit container
+		alsa.SNDRV_PCM_FORMAT_S24_3LE:    24, // Packed 24-bit
+		alsa.SNDRV_PCM_FORMAT_S16_BE:     16,
+		alsa.SNDRV_PCM_FORMAT_S24_BE:     32,
+		alsa.SNDRV_PCM_FORMAT_S24_3BE:    24,
+		alsa.SNDRV_PCM_FORMAT_S32_BE:     32,
+		alsa.SNDRV_PCM_FORMAT_FLOAT_LE:   32,
+		alsa.SNDRV_PCM_FORMAT_FLOAT_BE:   32,
+		alsa.SNDRV_PCM_FORMAT_FLOAT64_LE: 64,
+		alsa.SNDRV_PCM_FORMAT_FLOAT64_BE: 64,
 	}
 
 	for format, expectedBits := range testCases {
@@ -201,11 +201,11 @@ func testPcmState(t *testing.T) {
 		// Initial cached state is SETUP. State should report this (or OPEN, depending on the driver).
 		// The function gracefully falls back to the cached state if the underlying ioctl isn't supported.
 		initialState := pcm.State()
-		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_OPEN, alsa.PCM_STATE_SETUP}, initialState)
+		assert.Contains(t, []alsa.PcmState{alsa.SNDRV_PCM_STATE_OPEN, alsa.SNDRV_PCM_STATE_SETUP}, initialState)
 
 		require.NoError(t, pcm.Prepare())
 		// After Prepare, cached state is PREPARED. Kernel should report the same.
-		assert.Equal(t, alsa.PCM_STATE_PREPARED, pcm.State(), "State should be PREPARED after prepare")
+		assert.Equal(t, alsa.SNDRV_PCM_STATE_PREPARED, pcm.State(), "State should be PREPARED after prepare")
 
 		// Starting an empty stream is expected to cause an immediate underrun (EPIPE).
 		// We call Start() but don't check the error, as EPIPE is the correct behavior here.
@@ -217,7 +217,7 @@ func testPcmState(t *testing.T) {
 
 		// State should now report XRUN, or PREPARED if the driver auto-stops on underrun (due to stop_threshold).
 		finalState := pcm.State()
-		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_XRUN, alsa.PCM_STATE_PREPARED}, finalState, "State should be XRUN or PREPARED after starting an empty stream")
+		assert.Contains(t, []alsa.PcmState{alsa.SNDRV_PCM_STATE_XRUN, alsa.SNDRV_PCM_STATE_PREPARED}, finalState, "State should be XRUN or PREPARED after starting an empty stream")
 	})
 
 	t.Run("StateMmap", func(t *testing.T) {
@@ -228,10 +228,10 @@ func testPcmState(t *testing.T) {
 		// For MMAP streams, the status struct is mmapped, so the State should be accurate.
 		// After setup, the state in the kernel's mmap region should be SETUP.
 		initialState := pcm.State()
-		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_OPEN, alsa.PCM_STATE_SETUP}, initialState)
+		assert.Contains(t, []alsa.PcmState{alsa.SNDRV_PCM_STATE_OPEN, alsa.SNDRV_PCM_STATE_SETUP}, initialState)
 
 		require.NoError(t, pcm.Prepare())
-		assert.Equal(t, alsa.PCM_STATE_PREPARED, pcm.State(), "State should be PREPARED after prepare")
+		assert.Equal(t, alsa.SNDRV_PCM_STATE_PREPARED, pcm.State(), "State should be PREPARED after prepare")
 
 		// Starting an empty stream is expected to cause an immediate underrun (EPIPE).
 		// We call Start() but don't check the error, as EPIPE is the correct behavior here.
@@ -241,7 +241,7 @@ func testPcmState(t *testing.T) {
 
 		// State should now report XRUN, or PREPARED if the driver auto-stops on underrun.
 		finalState := pcm.State()
-		assert.Contains(t, []alsa.PcmState{alsa.PCM_STATE_XRUN, alsa.PCM_STATE_PREPARED}, finalState, "State should be XRUN or PREPARED after starting an empty mmap stream")
+		assert.Contains(t, []alsa.PcmState{alsa.SNDRV_PCM_STATE_XRUN, alsa.SNDRV_PCM_STATE_PREPARED}, finalState, "State should be XRUN or PREPARED after starting an empty mmap stream")
 	})
 }
 
@@ -292,14 +292,14 @@ func testPcmStop(t *testing.T) {
 	require.NoError(t, err)
 
 	state := pcm.State()
-	require.Equal(t, alsa.PCM_STATE_RUNNING, state, "Stream should be in RUNNING state after writing")
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, state, "Stream should be in RUNNING state after writing")
 
 	// Now stop the stream
 	err = pcm.Stop()
 	require.NoError(t, err, "pcm.Stop() failed")
 
 	state = pcm.State()
-	require.Equal(t, alsa.PCM_STATE_SETUP, state, "Stream should be in SETUP state after stopping")
+	require.Equal(t, alsa.SNDRV_PCM_STATE_SETUP, state, "Stream should be in SETUP state after stopping")
 
 	// Cleanly shut down the goroutine.
 	close(done)
@@ -981,7 +981,7 @@ func testPcmMmapWrite(t *testing.T) {
 func testPcmMmapRead(t *testing.T) {
 	// Use separate configs for playback and capture to handle start thresholds correctly.
 	playbackConfig := defaultConfig
-	playbackConfig.Format = alsa.PCM_FORMAT_S16_LE
+	playbackConfig.Format = alsa.SNDRV_PCM_FORMAT_S16_LE
 	// Set a large start threshold to prevent underruns at the beginning of the stream.
 	if playbackConfig.PeriodCount > 1 {
 		playbackConfig.StartThreshold = playbackConfig.PeriodSize * (playbackConfig.PeriodCount - 1)
@@ -990,7 +990,7 @@ func testPcmMmapRead(t *testing.T) {
 	}
 
 	captureConfig := defaultConfig
-	captureConfig.Format = alsa.PCM_FORMAT_S16_LE
+	captureConfig.Format = alsa.SNDRV_PCM_FORMAT_S16_LE
 	// Use the default start threshold for capture (1), by setting it to 0 here.
 	captureConfig.StartThreshold = 0
 
@@ -1232,7 +1232,7 @@ func testPcmParams(t *testing.T) {
 
 		// Test FormatIsSupported for a common format.
 		// The snd-aloop device only supports S16_LE by default, so we don't test for S32_LE.
-		assert.True(t, params.FormatIsSupported(alsa.PCM_FORMAT_S16_LE), "expected PCM_FORMAT_S16_LE to be supported")
+		assert.True(t, params.FormatIsSupported(alsa.SNDRV_PCM_FORMAT_S16_LE), "expected SNDRV_PCM_FORMAT_S16_LE to be supported")
 
 		// Test ToString
 		s := params.String()
@@ -1276,7 +1276,7 @@ func testPcmParams(t *testing.T) {
 		formatMask, err := params.Mask(alsa.SNDRV_PCM_HW_PARAM_FORMAT)
 		require.NoError(t, err)
 		setBits := 0
-		for i := 0; i < int(alsa.PCM_FORMAT_U18_3BE)+1; i++ {
+		for i := 0; i < int(alsa.SNDRV_PCM_FORMAT_U18_3BE)+1; i++ {
 			if formatMask.Test(uint(i)) {
 				setBits++
 			}
@@ -1306,7 +1306,7 @@ func testSetConfig(t *testing.T) {
 		Rate:        defaultConfig.Rate,
 		PeriodSize:  512,
 		PeriodCount: 2,
-		Format:      alsa.PCM_FORMAT_S16_LE,
+		Format:      alsa.SNDRV_PCM_FORMAT_S16_LE,
 	}
 
 	err = pcm.SetConfig(&newConfig)
@@ -1495,7 +1495,7 @@ func testPcmPause(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	state := pcm.State()
-	require.Equal(t, alsa.PCM_STATE_RUNNING, state, "PCM stream should be running before pause")
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, state, "PCM stream should be running before pause")
 
 	// Pause the stream. The I/O goroutines should now block.
 	err = pcm.Pause(true)
@@ -1511,7 +1511,7 @@ func testPcmPause(t *testing.T) {
 	}
 
 	state = pcm.State()
-	require.Equal(t, alsa.PCM_STATE_PAUSED, state, "PCM stream state should be PAUSED")
+	require.Equal(t, alsa.SNDRV_PCM_STATE_PAUSED, state, "PCM stream state should be PAUSED")
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -1519,7 +1519,7 @@ func testPcmPause(t *testing.T) {
 	require.NoError(t, pcm.Pause(false), "pcm.Pause(false) failed")
 
 	state = pcm.State()
-	require.Equal(t, alsa.PCM_STATE_RUNNING, state, "PCM stream state should be RUNNING after resume")
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, state, "PCM stream state should be RUNNING after resume")
 
 	// Let the goroutines run for another moment.
 	time.Sleep(50 * time.Millisecond)
@@ -1534,8 +1534,8 @@ func testPcmLoopback(t *testing.T) {
 		name   string
 		format alsa.PcmFormat
 	}{
-		{"S16_LE", alsa.PCM_FORMAT_S16_LE},
-		{"FLOAT_LE", alsa.PCM_FORMAT_FLOAT_LE},
+		{"S16_LE", alsa.SNDRV_PCM_FORMAT_S16_LE},
+		{"FLOAT_LE", alsa.SNDRV_PCM_FORMAT_FLOAT_LE},
 	}
 
 	// First, check if the loopback device supports the formats we want to test.
@@ -1752,7 +1752,7 @@ func testPcmLoopback(t *testing.T) {
 func testPcmMmapLoopback(t *testing.T) {
 	// Use separate configs for playback and capture to handle start thresholds correctly.
 	playbackConfig := defaultConfig
-	playbackConfig.Format = alsa.PCM_FORMAT_S16_LE
+	playbackConfig.Format = alsa.SNDRV_PCM_FORMAT_S16_LE
 
 	// Set a large start threshold to prevent underruns at the beginning of the stream.
 	if playbackConfig.PeriodCount > 1 {
@@ -1762,7 +1762,7 @@ func testPcmMmapLoopback(t *testing.T) {
 	}
 
 	captureConfig := defaultConfig
-	captureConfig.Format = alsa.PCM_FORMAT_S16_LE
+	captureConfig.Format = alsa.SNDRV_PCM_FORMAT_S16_LE
 
 	// Use the default start threshold for capture (1), by setting it to 0 here.
 	captureConfig.StartThreshold = 0
@@ -2040,7 +2040,7 @@ func (g *sineToneGenerator) Read(buffer []byte) {
 			offset := (f*int(g.numCh) + c) * int(bytesPerSample)
 
 			switch g.format {
-			case alsa.PCM_FORMAT_S16_LE:
+			case alsa.SNDRV_PCM_FORMAT_S16_LE:
 				var sample int16
 				if sine >= 1.0 {
 					sample = 32767
@@ -2051,7 +2051,7 @@ func (g *sineToneGenerator) Read(buffer []byte) {
 				}
 
 				binary.LittleEndian.PutUint16(buffer[offset:], uint16(sample))
-			case alsa.PCM_FORMAT_FLOAT_LE:
+			case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
 				var sample float32
 				if sine >= 1.0 {
 					sample = 1.0
@@ -2077,13 +2077,13 @@ func energy(buffer []byte, format alsa.PcmFormat) float64 {
 	sum := 0.0
 
 	switch format {
-	case alsa.PCM_FORMAT_S16_LE:
+	case alsa.SNDRV_PCM_FORMAT_S16_LE:
 		samples := unsafe.Slice((*int16)(unsafe.Pointer(&buffer[0])), len(buffer)/2)
 		for _, sample := range samples {
 			val := float64(sample)
 			sum += val * val
 		}
-	case alsa.PCM_FORMAT_FLOAT_LE:
+	case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
 		samples := unsafe.Slice((*float32)(unsafe.Pointer(&buffer[0])), len(buffer)/4)
 		for _, sample := range samples {
 			val := float64(sample)

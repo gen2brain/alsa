@@ -37,7 +37,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 	defer runtime.KeepAlive(data)
 
 	s := p.State()
-	if s == PCM_STATE_XRUN {
+	if s == SNDRV_PCM_STATE_XRUN {
 		if (p.flags & PCM_NORESTART) != 0 {
 			// If NORESTART is set, we must return EPIPE immediately.
 			return 0, syscall.EPIPE
@@ -49,7 +49,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 		}
 
 		// Recovery successful, state is now PREPARED.
-	} else if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
+	} else if s != SNDRV_PCM_STATE_RUNNING && s != SNDRV_PCM_STATE_PREPARED {
 		// Handle initial preparation if state is OPEN or SETUP.
 		if err := p.Prepare(); err != nil {
 			return 0, err
@@ -97,7 +97,7 @@ func (p *PCM) WriteI(data any, frames uint32) (int, error) {
 
 			// For underruns (EPIPE), try to recover if not disabled and if the stream
 			// was not intentionally stopped (which would put it in the SETUP state).
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != PCM_STATE_SETUP {
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != SNDRV_PCM_STATE_SETUP {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					// Recovery failed, return what we've written and the error.
 					return int(framesWritten), errRec
@@ -145,7 +145,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 	defer runtime.KeepAlive(buffer)
 
 	s := p.State()
-	if s == PCM_STATE_XRUN {
+	if s == SNDRV_PCM_STATE_XRUN {
 		if (p.flags & PCM_NORESTART) != 0 {
 			return 0, syscall.EPIPE
 		}
@@ -154,16 +154,16 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 		if err := p.xrunRecover(syscall.EPIPE); err != nil {
 			return 0, err
 		}
-	} else if s != PCM_STATE_RUNNING && s != PCM_STATE_PREPARED {
+	} else if s != SNDRV_PCM_STATE_RUNNING && s != SNDRV_PCM_STATE_PREPARED {
 		if err := p.Prepare(); err != nil {
 			return 0, err
 		}
-		s = PCM_STATE_PREPARED
+		s = SNDRV_PCM_STATE_PREPARED
 	}
 
 	// This logic matches tinyalsa's pcm_readi, which explicitly starts
 	// a capture stream if it is not already running.
-	if s != PCM_STATE_RUNNING {
+	if s != SNDRV_PCM_STATE_RUNNING {
 		if err := p.Start(); err != nil {
 			return 0, err
 		}
@@ -210,7 +210,7 @@ func (p *PCM) ReadI(buffer any, frames uint32) (int, error) {
 
 			// For overruns (EPIPE), try to recover if not disabled and if the stream
 			// was not intentionally stopped (which would put it in the SETUP state).
-			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != PCM_STATE_SETUP {
+			if (p.flags&PCM_NORESTART) == 0 && errors.Is(err, syscall.EPIPE) && p.State() != SNDRV_PCM_STATE_SETUP {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesRead), errRec
 				}
