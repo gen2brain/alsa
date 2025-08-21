@@ -2,13 +2,13 @@
 
 package alsa
 
-// SndPcmUframesT is an unsigned long in the ALSA headers.
+// sndPcmUframesT is an unsigned long in the ALSA headers.
 // On 32-bit architectures, this is a 32-bit unsigned integer.
-type SndPcmUframesT = uint32
+type sndPcmUframesT = uint32
 
-// SndPcmSframesT is a signed long in the ALSA headers.
+// sndPcmSframesT is a signed long in the ALSA headers.
 // On 32-bit architectures, this is a 32-bit signed integer.
-type SndPcmSframesT = int32
+type sndPcmSframesT = int32
 
 // clong is a type alias for the C `long` type on 32-bit systems.
 type clong = int32
@@ -23,7 +23,7 @@ type timespec struct {
 type sndPcmMmapStatus struct {
 	State          PcmState
 	Pad1           int32
-	HwPtr          SndPcmUframesT
+	HwPtr          sndPcmUframesT
 	Tstamp         timespec
 	SuspendedState PcmState
 	AudioTstamp    timespec
@@ -34,12 +34,12 @@ type sndPcmStatus struct {
 	State               PcmState
 	TriggerTstamp       timespec
 	Tstamp              timespec
-	ApplPtr             SndPcmUframesT
-	HwPtr               SndPcmUframesT
-	Delay               SndPcmSframesT
-	Avail               SndPcmUframesT
-	AvailMax            SndPcmUframesT
-	Overrange           SndPcmUframesT
+	ApplPtr             sndPcmUframesT
+	HwPtr               sndPcmUframesT
+	Delay               sndPcmSframesT
+	Avail               sndPcmUframesT
+	AvailMax            sndPcmUframesT
+	Overrange           sndPcmUframesT
 	SuspendedState      PcmState
 	AudioTstampData     uint32
 	AudioTstamp         timespec
@@ -69,13 +69,13 @@ type sndPcmSwParams struct {
 	TstampMode       uint32
 	PeriodStep       uint32
 	SleepMin         uint32
-	AvailMin         SndPcmUframesT
-	XferAlign        SndPcmUframesT
-	StartThreshold   SndPcmUframesT
-	StopThreshold    SndPcmUframesT
-	SilenceThreshold SndPcmUframesT
-	SilenceSize      SndPcmUframesT
-	Boundary         SndPcmUframesT
+	AvailMin         sndPcmUframesT
+	XferAlign        sndPcmUframesT
+	StartThreshold   sndPcmUframesT
+	StopThreshold    sndPcmUframesT
+	SilenceThreshold sndPcmUframesT
+	SilenceSize      sndPcmUframesT
+	Boundary         sndPcmUframesT
 	Reserved         [64]byte
 }
 

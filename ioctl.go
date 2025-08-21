@@ -134,7 +134,7 @@ func init() {
 
 	// Synchronization IOCTLs
 	SNDRV_PCM_IOCTL_HWSYNC = io('A', 0x22)
-	SNDRV_PCM_IOCTL_DELAY = ior('A', 0x21, unsafe.Sizeof(SndPcmSframesT(0)))
+	SNDRV_PCM_IOCTL_DELAY = ior('A', 0x21, unsafe.Sizeof(sndPcmSframesT(0)))
 	SNDRV_PCM_IOCTL_TTSTAMP = iow('A', 0x03, unsafe.Sizeof(int32(0)))
 	SNDRV_PCM_IOCTL_SYNC_PTR = iowr('A', 0x23, unsafe.Sizeof(sndPcmSyncPtr{}))
 

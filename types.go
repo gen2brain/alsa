@@ -4,14 +4,14 @@ package alsa
 type sndXferi struct {
 	Result int     // Corresponds to C ssize_t
 	Buf    uintptr // void*
-	Frames SndPcmUframesT
+	Frames sndPcmUframesT
 }
 
 // sndXfern is for non-interleaved read/write operations.
 type sndXfern struct {
 	Result int     // Corresponds to C ssize_t
 	Bufs   uintptr // void**
-	Frames SndPcmUframesT
+	Frames sndPcmUframesT
 }
 
 // sndMask is a bitmask for hardware parameters.
@@ -45,8 +45,8 @@ type sndPcmInfo struct {
 
 // sndPcmMmapControl contains control parameters for an MMAP PCM stream.
 type sndPcmMmapControl struct {
-	ApplPtr  SndPcmUframesT
-	AvailMin SndPcmUframesT
+	ApplPtr  sndPcmUframesT
+	AvailMin sndPcmUframesT
 }
 
 // sndPcmHwParams contains hardware parameters for a PCM device.
@@ -62,7 +62,7 @@ type sndPcmHwParams struct {
 	Msbits    uint32
 	RateNum   uint32
 	RateDen   uint32
-	FifoSize  SndPcmUframesT
+	FifoSize  sndPcmUframesT
 	Reserved  [64]byte
 }
 

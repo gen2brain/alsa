@@ -53,7 +53,7 @@ func (p *PCM) Write(data any) (int, error) {
 		offsetBytes := PcmFramesToBytes(p, framesWritten)
 
 		xfer := sndXferi{
-			Frames: SndPcmUframesT(remainingFrames),
+			Frames: sndPcmUframesT(remainingFrames),
 			Buf:    dataPtr + uintptr(offsetBytes),
 		}
 
@@ -134,7 +134,7 @@ func (p *PCM) Read(data any) (int, error) {
 		offsetBytes := PcmFramesToBytes(p, framesRead)
 
 		xfer := sndXferi{
-			Frames: SndPcmUframesT(remainingFrames),
+			Frames: sndPcmUframesT(remainingFrames),
 			Buf:    bufferPtr + uintptr(offsetBytes),
 		}
 

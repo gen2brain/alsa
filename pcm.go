@@ -40,7 +40,7 @@ type PCM struct {
 	mmapControl        *sndPcmMmapControl
 	syncPointer        *sndPcmSyncPtr // Used for non-mmap streams or if mmap for status/control fails
 	isMmapped          bool
-	boundary           SndPcmUframesT
+	boundary           sndPcmUframesT
 	xruns              int    // Counter for overruns/underruns
 	noirqFramesPerMsec uint32 // For PCM_NOIRQ calculation
 }
@@ -350,13 +350,13 @@ func (p *PCM) SetConfig(config *Config) error {
 	if config.AvailMin == 0 {
 		p.config.AvailMin = p.config.PeriodSize
 	}
-	swParams.AvailMin = SndPcmUframesT(p.config.AvailMin)
+	swParams.AvailMin = sndPcmUframesT(p.config.AvailMin)
 
 	if config.StartThreshold == 0 {
 		if (p.flags & PCM_IN) != 0 {
 			swParams.StartThreshold = 1
 		} else {
-			swParams.StartThreshold = SndPcmUframesT(config.PeriodCount * config.PeriodSize / 2)
+			swParams.StartThreshold = sndPcmUframesT(config.PeriodCount * config.PeriodSize / 2)
 		}
 		p.config.StartThreshold = uint32(swParams.StartThreshold)
 	} else {
@@ -365,19 +365,19 @@ func (p *PCM) SetConfig(config *Config) error {
 
 	if config.StopThreshold == 0 {
 		if (p.flags & PCM_IN) != 0 {
-			swParams.StopThreshold = SndPcmUframesT(config.PeriodCount * config.PeriodSize * 10)
+			swParams.StopThreshold = sndPcmUframesT(config.PeriodCount * config.PeriodSize * 10)
 		} else {
-			swParams.StopThreshold = SndPcmUframesT(config.PeriodCount * config.PeriodSize * 10)
+			swParams.StopThreshold = sndPcmUframesT(config.PeriodCount * config.PeriodSize * 10)
 		}
 		p.config.StopThreshold = uint32(swParams.StopThreshold)
 	} else {
 		p.config.StopThreshold = config.StopThreshold
 	}
-	swParams.StopThreshold = SndPcmUframesT(p.config.StopThreshold)
+	swParams.StopThreshold = sndPcmUframesT(p.config.StopThreshold)
 
-	swParams.XferAlign = SndPcmUframesT(config.PeriodSize / 2) // Needed for old kernels
-	swParams.SilenceThreshold = SndPcmUframesT(config.SilenceThreshold)
-	swParams.SilenceSize = SndPcmUframesT(config.SilenceSize)
+	swParams.XferAlign = sndPcmUframesT(config.PeriodSize / 2) // Needed for old kernels
+	swParams.SilenceThreshold = sndPcmUframesT(config.SilenceThreshold)
+	swParams.SilenceSize = sndPcmUframesT(config.SilenceSize)
 
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_SW_PARAMS, uintptr(unsafe.Pointer(swParams))); err != nil {
 		return fmt.Errorf("ioctl SW_PARAMS (write) failed: %w", err)
@@ -692,7 +692,7 @@ func (p *PCM) mapStatusAndControl() error {
 	}
 
 	// Initialize AvailMin in the control structure (shared or fallback).
-	var availMin = SndPcmUframesT(p.config.AvailMin)
+	var availMin = sndPcmUframesT(p.config.AvailMin)
 	if unsafe.Sizeof(availMin) == 8 {
 		atomic.StoreUint64((*uint64)(unsafe.Pointer(&p.mmapControl.AvailMin)), uint64(availMin))
 	} else {

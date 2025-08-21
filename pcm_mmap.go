@@ -225,12 +225,12 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 // mmapBegin prepares for a memory-mapped transfer. It returns a slice of the main buffer corresponding to the available contiguous
 // space for writing or reading, the offset in frames from the start of the buffer, and the number of frames available in that slice.
-func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualFrames uint32, avail SndPcmUframesT, err error) {
-	var applPtr SndPcmUframesT
+func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualFrames uint32, avail sndPcmUframesT, err error) {
+	var applPtr sndPcmUframesT
 	if unsafe.Sizeof(applPtr) == 8 {
-		applPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		applPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	} else {
-		applPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		applPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	}
 
 	tmp, availErr := p.availUpdate()
@@ -240,12 +240,12 @@ func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 		return
 	}
 
-	avail = SndPcmUframesT(tmp)
+	avail = sndPcmUframesT(tmp)
 	if wantFrames > uint32(avail) {
 		wantFrames = uint32(avail)
 	}
 
-	offsetFrames = uint32(applPtr % SndPcmUframesT(p.bufferSize))
+	offsetFrames = uint32(applPtr % sndPcmUframesT(p.bufferSize))
 	continuousFrames := p.bufferSize - offsetFrames
 	framesToCopy := wantFrames
 
@@ -268,17 +268,17 @@ func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 
 // mmapCommit commits the number of frames transferred after a mmapBegin call.
 func (p *PCM) mmapCommit(frames uint32) error {
-	var applPtr SndPcmUframesT
+	var applPtr sndPcmUframesT
 	ptrSize := unsafe.Sizeof(applPtr)
 
-	var currentApplPtr SndPcmUframesT
+	var currentApplPtr sndPcmUframesT
 	if ptrSize == 8 {
-		currentApplPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		currentApplPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	} else {
-		currentApplPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		currentApplPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	}
 
-	newApplPtr := currentApplPtr + SndPcmUframesT(frames)
+	newApplPtr := currentApplPtr + sndPcmUframesT(frames)
 	if p.boundary > 0 && newApplPtr >= p.boundary {
 		newApplPtr -= p.boundary
 	}
@@ -301,13 +301,13 @@ func (p *PCM) availUpdate() (int, error) {
 		return 0, err
 	}
 
-	var applPtr, hwPtr SndPcmUframesT
+	var applPtr, hwPtr sndPcmUframesT
 	if unsafe.Sizeof(applPtr) == 8 {
-		applPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
-		hwPtr = SndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
+		applPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
 	} else {
-		applPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
-		hwPtr = SndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
+		applPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
 	}
 
 	var avail int
