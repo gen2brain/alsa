@@ -5,12 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-audio/audio"
-	"github.com/go-audio/wav"
 
 	"github.com/gen2brain/alsa"
 )
@@ -31,13 +33,13 @@ func main() {
 	flag.IntVar(&device, "device", 0, "The device to receive the audio")
 	flag.IntVar(&periodSize, "period-size", 1024, "The size of a period in frames")
 	flag.IntVar(&periodCount, "period-count", 4, "The number of periods")
-	flag.IntVar(&channels, "channels", 0, "The amount of channels per frame (0 = use WAV file's channels)")
-	flag.IntVar(&rate, "rate", 0, "The amount of frames per second (0 = use WAV file's rate)")
+	flag.IntVar(&channels, "channels", 0, "The amount of channels per frame (0 = use file's channels)")
+	flag.IntVar(&rate, "rate", 0, "The amount of frames per second (0 = use file's rate)")
 	flag.StringVar(&formatStr, "format", "", "The sample format (s16, s24, s32, float, float64)")
 	flag.BoolVar(&mmap, "mmap", false, "Use memory-mapped (MMAP) I/O")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] <wav-file>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] <wav-or-mp3-file>\n", os.Args[0])
 		fmt.Fprintln(os.Stderr, "\nOptions:")
 		for _, name := range []string{"card", "device", "period-size", "period-count", "channels", "rate", "format", "mmap"} {
 			f := flag.Lookup(name)
@@ -54,17 +56,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	wavPath := flag.Arg(0)
-	wavFile, err := os.Open(wavPath)
+	filePath := flag.Arg(0)
+	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening WAV file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error opening audio file: %v\n", err)
 		os.Exit(1)
 	}
-	defer wavFile.Close()
+	defer file.Close()
 
-	decoder := wav.NewDecoder(wavFile)
-	if !decoder.IsValidFile() {
-		fmt.Fprintln(os.Stderr, "Invalid WAV file")
+	var decoder AudioDecoder
+	var decErr error
+
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".wav":
+		decoder, decErr = newWavDecoder(file)
+	case ".mp3":
+		decoder, decErr = newMp3Decoder(file)
+	default:
+		decErr = fmt.Errorf("unsupported file format: %s", filepath.Ext(filePath))
+	}
+
+	if decErr != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing decoder: %v\n", decErr)
 		os.Exit(1)
 	}
 
@@ -73,20 +86,20 @@ func main() {
 		PeriodCount: uint32(periodCount),
 	}
 
-	// Determine channels and rate from flags or WAV file.
+	// Determine channels and rate from flags or audio file.
 	if channels > 0 {
 		config.Channels = uint32(channels)
 	} else {
-		config.Channels = uint32(decoder.NumChans)
+		config.Channels = uint32(decoder.NumChans())
 	}
 
 	if rate > 0 {
 		config.Rate = uint32(rate)
 	} else {
-		config.Rate = decoder.SampleRate
+		config.Rate = decoder.SampleRate()
 	}
 
-	// Determine a PCM format from flags or by inspecting the WAV file.
+	// Determine a PCM format from flags or by inspecting the audio file.
 	pcmFormat, err := determineFormat(formatStr, decoder)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error determining format: %v\n", err)
@@ -108,7 +121,7 @@ func main() {
 
 	config = pcm.Config()
 
-	fmt.Printf("Playing WAV file: %s\n", wavPath)
+	fmt.Printf("Playing audio file: %s\n", filePath)
 	fmt.Printf("ALSA device: hw:%d,%d\n", card, device)
 	fmt.Printf("Configuration: %d channels, %d Hz, %s\n", config.Channels, config.Rate, alsa.PcmParamFormatNames[config.Format])
 	fmt.Printf("Period size: %d, Period count: %d\n", config.PeriodSize, config.PeriodCount)
@@ -116,11 +129,11 @@ func main() {
 
 	totalFramesDuration, err := decoder.Duration()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting WAV duration: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error getting audio duration: %v\n", err)
 		os.Exit(1)
 	}
 
-	totalFrames := uint32(totalFramesDuration.Seconds() * float64(decoder.SampleRate))
+	totalFrames := uint32(math.Ceil(totalFramesDuration.Seconds() * float64(decoder.SampleRate())))
 	framesWritten := uint32(0)
 
 	fmt.Println("Starting playback...")
@@ -129,11 +142,13 @@ func main() {
 	chunkFrames := config.PeriodSize
 	pcmBuffer := &audio.IntBuffer{
 		Format: &audio.Format{
-			NumChannels: int(decoder.NumChans),
-			SampleRate:  int(decoder.SampleRate),
+			NumChannels: int(decoder.NumChans()),
+			SampleRate:  int(decoder.SampleRate()),
 		},
-		Data: make([]int, int(chunkFrames)*int(decoder.NumChans)),
+		Data: make([]int, int(chunkFrames)*int(decoder.NumChans())),
 	}
+
+	sourceBitDepth := decoder.BitDepth()
 
 	for {
 		// n is the number of SAMPLES read from the decoder.
@@ -143,7 +158,7 @@ func main() {
 				break
 			}
 
-			fmt.Fprintf(os.Stderr, "Error reading PCM buffer from WAV: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error reading PCM buffer from decoder: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -155,14 +170,13 @@ func main() {
 		samples := pcmBuffer.Data[:n]
 		var dataToWrite any
 
-		// Convert the generic `[]int` from the decoder to the specific typed
-		// slice needed by the ALSA device.
+		// Convert the generic `[]int` from the decoder to the specific typed slice needed by the ALSA device.
 		switch config.Format {
 		case alsa.SNDRV_PCM_FORMAT_S8:
 			slice := make([]int8, n)
 			for i, s := range samples {
 				// Scale sample from source bit depth to 8-bit.
-				slice[i] = int8(s >> (decoder.BitDepth - 8))
+				slice[i] = int8(s >> (sourceBitDepth - 8))
 			}
 			dataToWrite = slice
 		case alsa.SNDRV_PCM_FORMAT_S16_LE:
@@ -187,7 +201,7 @@ func main() {
 		case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
 			slice := make([]float32, n)
 			// Normalize integer sample to float range [-1.0, 1.0].
-			maxVal := 1 << (decoder.BitDepth - 1)
+			maxVal := 1 << (sourceBitDepth - 1)
 			for i, s := range samples {
 				slice[i] = float32(s) / float32(maxVal)
 			}
@@ -195,7 +209,7 @@ func main() {
 		case alsa.SNDRV_PCM_FORMAT_FLOAT64_LE:
 			slice := make([]float64, n)
 			// Normalize integer sample to float range [-1.0, 1.0].
-			maxVal := 1 << (decoder.BitDepth - 1)
+			maxVal := 1 << (sourceBitDepth - 1)
 			for i, s := range samples {
 				slice[i] = float64(s) / float64(maxVal)
 			}
@@ -210,11 +224,11 @@ func main() {
 		// Write the typed slice directly to the ALSA device.
 		var writeErr error
 		if mmap {
-			writtenBytes, err := pcm.MmapWrite(dataToWrite)
+			writtenFrames, err := pcm.MmapWrite(dataToWrite)
 			if err != nil {
 				writeErr = err
 			} else {
-				framesWritten += alsa.PcmBytesToFrames(pcm, uint32(writtenBytes))
+				framesWritten += uint32(writtenFrames)
 			}
 		} else {
 			writtenFrames, err := pcm.Write(dataToWrite)
@@ -245,7 +259,7 @@ func main() {
 }
 
 // determineFormat selects the appropriate ALSA PCM format.
-func determineFormat(formatStr string, decoder *wav.Decoder) (alsa.PcmFormat, error) {
+func determineFormat(formatStr string, decoder AudioDecoder) (alsa.PcmFormat, error) {
 	if formatStr != "" {
 		switch formatStr {
 		case "s8":
@@ -265,19 +279,19 @@ func determineFormat(formatStr string, decoder *wav.Decoder) (alsa.PcmFormat, er
 		}
 	}
 
-	if decoder.WavAudioFormat == 3 { // IEEE float
-		switch decoder.BitDepth {
+	if decoder.IsFloat() { // Check for floating-point audio
+		switch decoder.BitDepth() {
 		case 32:
 			return alsa.SNDRV_PCM_FORMAT_FLOAT_LE, nil
 		case 64:
 			return alsa.SNDRV_PCM_FORMAT_FLOAT64_LE, nil
 		default:
-			return 0, fmt.Errorf("unsupported float bit depth from WAV: %d", decoder.BitDepth)
+			return 0, fmt.Errorf("unsupported float bit depth from source: %d", decoder.BitDepth())
 		}
 	}
 
 	// Assume integer PCM.
-	switch decoder.BitDepth {
+	switch decoder.BitDepth() {
 	case 8:
 		return alsa.SNDRV_PCM_FORMAT_S8, nil
 	case 16:
@@ -287,6 +301,6 @@ func determineFormat(formatStr string, decoder *wav.Decoder) (alsa.PcmFormat, er
 	case 32:
 		return alsa.SNDRV_PCM_FORMAT_S32_LE, nil
 	default:
-		return 0, fmt.Errorf("unsupported integer bit depth from WAV: %d", decoder.BitDepth)
+		return 0, fmt.Errorf("unsupported integer bit depth from source: %d", decoder.BitDepth())
 	}
 }
