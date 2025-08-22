@@ -94,12 +94,6 @@ func main() {
 	}
 	config.Format = pcmFormat
 
-	fmt.Printf("Playing WAV file: %s\n", wavPath)
-	fmt.Printf("ALSA device: hw:%d,%d\n", card, device)
-	fmt.Printf("Configuration: %d channels, %d Hz, %s\n", config.Channels, config.Rate, alsa.PcmParamFormatNames[config.Format])
-	fmt.Printf("Period size: %d, Period count: %d\n", config.PeriodSize, config.PeriodCount)
-	fmt.Printf("Mode: %s\n", map[bool]string{false: "Standard I/O", true: "MMAP"}[mmap])
-
 	flags := alsa.PCM_OUT
 	if mmap {
 		flags |= alsa.PCM_MMAP
@@ -112,12 +106,13 @@ func main() {
 	}
 	defer pcm.Close()
 
-	if mmap {
-		if err := pcm.Prepare(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error preparing MMAP stream: %v\n", err)
-			os.Exit(1)
-		}
-	}
+	config = pcm.Config()
+
+	fmt.Printf("Playing WAV file: %s\n", wavPath)
+	fmt.Printf("ALSA device: hw:%d,%d\n", card, device)
+	fmt.Printf("Configuration: %d channels, %d Hz, %s\n", config.Channels, config.Rate, alsa.PcmParamFormatNames[config.Format])
+	fmt.Printf("Period size: %d, Period count: %d\n", config.PeriodSize, config.PeriodCount)
+	fmt.Printf("Mode: %s\n", map[bool]string{false: "Standard I/O", true: "MMAP"}[mmap])
 
 	totalFramesDuration, err := decoder.Duration()
 	if err != nil {
