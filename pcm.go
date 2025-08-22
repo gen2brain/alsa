@@ -590,6 +590,43 @@ func (p *PCM) State() PcmState {
 	return status.State
 }
 
+// AvailUpdate synchronizes the PCM state with the kernel and returns the number of available frames.
+// For playback streams, this is the number of frames that can be written.
+// For capture streams, this is the number of frames that can be read.
+func (p *PCM) AvailUpdate() (int, error) {
+	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_AVAIL_MIN); err != nil {
+		return 0, err
+	}
+
+	var applPtr, hwPtr sndPcmUframesT
+	if unsafe.Sizeof(applPtr) == 8 {
+		applPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
+	} else {
+		applPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
+		hwPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
+	}
+
+	var avail int
+	if (p.flags & PCM_IN) != 0 {
+		// For capture, AvailUpdate is the number of frames ready to be read.
+		avail = int(hwPtr) - int(applPtr)
+		if avail < 0 {
+			avail += int(p.boundary)
+		}
+	} else {
+		// For playback, AvailUpdate is the free space.
+		avail = int(hwPtr) + int(p.bufferSize) - int(applPtr)
+		if avail < 0 {
+			avail += int(p.boundary)
+		} else if avail >= int(p.boundary) {
+			avail -= int(p.boundary)
+		}
+	}
+
+	return avail, nil
+}
+
 // xrunRecover is an internal helper to recover from an XRUN.
 func (p *PCM) xrunRecover(err error) error {
 	isEPIPE := errors.Is(err, syscall.EPIPE)
@@ -601,8 +638,6 @@ func (p *PCM) xrunRecover(err error) error {
 
 	if isEPIPE {
 		p.xruns++
-
-		return nil
 	}
 
 	if (p.flags & PCM_NORESTART) != 0 {

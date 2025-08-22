@@ -37,7 +37,7 @@ func PcmParamsGet(card, device uint, flags PcmFlag) (*PcmParams, error) {
 	hwParams := &sndPcmHwParams{}
 	paramInit(hwParams)
 
-	// HW_PARAMS will fill the struct with default parameters.
+	// HW_REFINE will fill the struct with default parameters.
 	if err := ioctl(file.Fd(), SNDRV_PCM_IOCTL_HW_REFINE, uintptr(unsafe.Pointer(hwParams))); err != nil {
 		return nil, fmt.Errorf("ioctl HW_REFINE failed: %w", err)
 	}
@@ -190,12 +190,10 @@ func paramInit(p *sndPcmHwParams) {
 	}
 
 	for n := range p.Intervals {
-		p.Intervals[n].MinVal = 0
 		p.Intervals[n].MaxVal = ^uint32(0)
 	}
 
 	p.Rmask = ^uint32(0)
-	p.Cmask = 0
 	p.Info = ^uint32(0)
 }
 

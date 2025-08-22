@@ -43,9 +43,9 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			break
 		}
 
-		avail, availErr := p.availUpdate()
+		avail, availErr := p.AvailUpdate()
 		if availErr != nil {
-			return offset, fmt.Errorf("availUpdate failed: %w", availErr)
+			return offset, fmt.Errorf("AvailUpdate failed: %w", availErr)
 		}
 
 		buffer, _, framesToCopy, _, err := p.mmapBegin(wantFrames)
@@ -144,9 +144,9 @@ func (p *PCM) MmapRead(data any) (int, error) {
 	}
 
 	for remainingBytes > 0 {
-		avail, availErr := p.availUpdate()
+		avail, availErr := p.AvailUpdate()
 		if availErr != nil {
-			return offset, fmt.Errorf("availUpdate failed: %w", availErr)
+			return offset, fmt.Errorf("AvailUpdate failed: %w", availErr)
 		}
 
 		wantFrames := PcmBytesToFrames(p, uint32(remainingBytes))
@@ -217,7 +217,7 @@ func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 		applPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	}
 
-	tmp, availErr := p.availUpdate()
+	tmp, availErr := p.AvailUpdate()
 	if availErr != nil {
 		err = availErr
 
@@ -275,41 +275,4 @@ func (p *PCM) mmapCommit(frames uint32) error {
 
 	// After updating the application pointer, we must notify the kernel.
 	return p.syncPtr(0)
-}
-
-// availUpdate synchronizes the PCM state with the kernel and returns the number of available frames.
-// For playback streams, this is the number of frames that can be written.
-// For capture streams, this is the number of frames that can be read.
-func (p *PCM) availUpdate() (int, error) {
-	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_AVAIL_MIN); err != nil {
-		return 0, err
-	}
-
-	var applPtr, hwPtr sndPcmUframesT
-	if unsafe.Sizeof(applPtr) == 8 {
-		applPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
-		hwPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
-	} else {
-		applPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
-		hwPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapStatus.HwPtr))))
-	}
-
-	var avail int
-	if (p.flags & PCM_IN) != 0 {
-		// For capture, availUpdate is the number of frames ready to be read.
-		avail = int(hwPtr) - int(applPtr)
-		if avail < 0 {
-			avail += int(p.boundary)
-		}
-	} else {
-		// For playback, availUpdate is the free space.
-		avail = int(hwPtr) + int(p.bufferSize) - int(applPtr)
-		if avail < 0 {
-			avail += int(p.boundary)
-		} else if avail >= int(p.boundary) {
-			avail -= int(p.boundary)
-		}
-	}
-
-	return avail, nil
 }

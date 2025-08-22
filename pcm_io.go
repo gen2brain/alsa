@@ -17,19 +17,13 @@ func (p *PCM) Write(data any) (int, error) {
 		return 0, fmt.Errorf("cannot write to a capture device")
 	}
 
-	byteLen, err := checkSlice(data)
+	dataPtr, dataByteLen, err := checkSliceAndGetData(data)
 	if err != nil {
 		return 0, fmt.Errorf("invalid data type for Write: %w", err)
 	}
 
-	frames := PcmBytesToFrames(p, byteLen)
-
-	requiredBytes := PcmFramesToBytes(p, frames)
-	if byteLen < requiredBytes {
-		return 0, fmt.Errorf("data buffer too small: needs %d bytes, got %d", requiredBytes, byteLen)
-	}
-
-	if frames == 0 || requiredBytes == 0 {
+	frames := PcmBytesToFrames(p, dataByteLen)
+	if frames == 0 {
 		return 0, fmt.Errorf("invalid data for Write")
 	}
 
@@ -42,11 +36,6 @@ func (p *PCM) Write(data any) (int, error) {
 		}
 	}
 
-	dataPtr := uintptr(0)
-	if reflect.ValueOf(data).Len() > 0 {
-		dataPtr = reflect.ValueOf(data).Index(0).Addr().Pointer()
-	}
-
 	framesWritten := uint32(0)
 	for framesWritten < frames {
 		remainingFrames := frames - framesWritten
@@ -54,18 +43,16 @@ func (p *PCM) Write(data any) (int, error) {
 
 		xfer := sndXferi{
 			Frames: sndPcmUframesT(remainingFrames),
-			Buf:    dataPtr + uintptr(offsetBytes),
+			Buf:    uintptr(dataPtr) + uintptr(offsetBytes),
 		}
 
 		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_WRITEI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
 		if err != nil {
-			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
 			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesWritten), errRec
 				}
 
-				// Recovery succeeded, continue the loop to retry writing.
 				continue
 			}
 
@@ -95,19 +82,13 @@ func (p *PCM) Read(data any) (int, error) {
 		return 0, fmt.Errorf("use MmapRead for mmap devices")
 	}
 
-	byteLen, err := checkSlice(data)
+	dataPtr, dataByteLen, err := checkSliceAndGetData(data)
 	if err != nil {
-		return 0, fmt.Errorf("invalid buffer type for Read: %w", err)
+		return 0, fmt.Errorf("invalid data type for Read: %w", err)
 	}
 
-	frames := PcmBytesToFrames(p, byteLen)
-
-	requiredBytes := PcmFramesToBytes(p, frames)
-	if byteLen < requiredBytes {
-		return 0, fmt.Errorf("buffer too small: needs %d bytes, got %d", requiredBytes, byteLen)
-	}
-
-	if frames == 0 || requiredBytes == 0 {
+	frames := PcmBytesToFrames(p, dataByteLen)
+	if frames == 0 {
 		return 0, fmt.Errorf("invalid data for Read")
 	}
 
@@ -120,11 +101,6 @@ func (p *PCM) Read(data any) (int, error) {
 		}
 	}
 
-	bufferPtr := uintptr(0)
-	if reflect.ValueOf(data).Len() > 0 {
-		bufferPtr = reflect.ValueOf(data).Index(0).Addr().Pointer()
-	}
-
 	framesRead := uint32(0)
 	for framesRead < frames {
 		remainingFrames := frames - framesRead
@@ -132,12 +108,11 @@ func (p *PCM) Read(data any) (int, error) {
 
 		xfer := sndXferi{
 			Frames: sndPcmUframesT(remainingFrames),
-			Buf:    bufferPtr + uintptr(offsetBytes),
+			Buf:    uintptr(dataPtr) + uintptr(offsetBytes),
 		}
 
 		err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_READI_FRAMES, uintptr(unsafe.Pointer(&xfer)))
 		if err != nil {
-			// For ESTRPIPE, try to recover if not disabled. EPIPE will just be counted.
 			if (p.flags&PCM_NORESTART) == 0 && (errors.Is(err, syscall.ESTRPIPE) || errors.Is(err, syscall.EPIPE)) {
 				if errRec := p.xrunRecover(err); errRec != nil {
 					return int(framesRead), errRec
