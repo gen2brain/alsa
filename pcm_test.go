@@ -76,9 +76,13 @@ func TestPcmInvalidBuffers(t *testing.T) {
 	_, err = pcm.Write(123)
 	assert.Error(t, err, "Write with non-slice buffer should fail")
 
-	var unsupportedSlice []struct{}
+	var unsupportedSlice = []int64{1, 1, 1, 1}
 	_, err = pcm.Write(unsupportedSlice)
 	assert.Error(t, err, "Write with unsupported slice type should fail")
+
+	var emptySlice []int16
+	_, err = pcm.Write(emptySlice)
+	assert.Error(t, err, "Write with empty slice should fail")
 }
 
 // TestPcmHardware runs all hardware-related tests sequentially to avoid race conditions
@@ -573,12 +577,12 @@ func testPcmWriteiTiming(t *testing.T) {
 
 	// The total time should be roughly the time it takes to play all the data.
 	expectedFrames := uint32(writeCount) * config.PeriodSize
-	expectedDurationMs := float64(expectedFrames) * 1000.0 / float64(config.Rate)
+	expectedDurationMs := math.Ceil(float64(expectedFrames) * 1000.0 / float64(config.Rate))
 	durationMs := float64(duration.Milliseconds())
 
 	// Allow a generous tolerance for timing assertions in a non-realtime environment.
-	tolerance := 250.0 // ms
-	if math.Abs(durationMs-expectedDurationMs) > tolerance {
+	tolerance := 100.0 // ms
+	if (durationMs-expectedDurationMs) > tolerance || (expectedDurationMs-durationMs) > tolerance {
 		t.Logf("Write+Drain timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
 	}
 }
@@ -613,6 +617,10 @@ func testPcmReadiTiming(t *testing.T) {
 	}
 	defer playbackPcm.Unlink()
 
+	// Prepare streams before I/O to prevent a race condition on startup.
+	require.NoError(t, playbackPcm.Prepare())
+	require.NoError(t, pcm.Prepare())
+
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 	readyToWrite := make(chan struct{})
@@ -630,6 +638,7 @@ func testPcmReadiTiming(t *testing.T) {
 			case <-done:
 				return
 			default:
+				// The first Write call on the prepared stream will start both linked streams.
 				_, err := playbackPcm.Write(playbackBuffer)
 				if err != nil {
 					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
@@ -661,13 +670,6 @@ func testPcmReadiTiming(t *testing.T) {
 		// The first call to Read will implicitly start both linked streams.
 		read, err := pcm.Read(buffer)
 		if err != nil {
-			// Allow EPIPE/EBADFD here as well.
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
-				t.Logf("Read encountered expected error (EPIPE/EBADFD) on iteration %d, stopping read loop: %v", i, err)
-
-				break
-			}
-
 			t.Fatalf("Read failed on iteration %d: %v", i, err)
 		}
 
@@ -678,10 +680,10 @@ func testPcmReadiTiming(t *testing.T) {
 
 	duration := time.Since(start)
 
-	expectedDurationMs := float64(frames*readCount) * 1000.0 / float64(defaultConfig.Rate)
+	expectedDurationMs := math.Ceil(float64(frames*readCount) * 1000.0 / float64(defaultConfig.Rate))
 	durationMs := float64(duration.Milliseconds())
 
-	tolerance := 250.0 // ms
+	tolerance := 100.0 // ms
 	if (durationMs-expectedDurationMs) > tolerance || (expectedDurationMs-durationMs) > tolerance {
 		t.Logf("Read timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
 	}
