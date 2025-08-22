@@ -2,15 +2,15 @@ package alsa
 
 // sndXferi is for interleaved read/write operations.
 type sndXferi struct {
-	Result int     // Corresponds to C ssize_t
-	Buf    uintptr // void*
+	Result sndPcmSframesT
+	Buf    uintptr
 	Frames sndPcmUframesT
 }
 
 // sndXfern is for non-interleaved read/write operations.
 type sndXfern struct {
-	Result int     // Corresponds to C ssize_t
-	Bufs   uintptr // void**
+	Result sndPcmSframesT
+	Bufs   uintptr
 	Frames sndPcmUframesT
 }
 
@@ -39,7 +39,7 @@ type sndPcmInfo struct {
 	DevSubclass     int32
 	SubdevicesCount uint32
 	SubdevicesAvail uint32
-	Sync            [16]byte // snd_sync_id_t
+	Sync            [16]byte
 	Reserved        [64]byte
 }
 
@@ -53,9 +53,9 @@ type sndPcmMmapControl struct {
 type sndPcmHwParams struct {
 	Flags     uint32
 	Masks     [3]sndMask
-	Mres      [5]sndMask // reserved for future use
+	Mres      [5]sndMask
 	Intervals [12]sndInterval
-	Ires      [9]sndInterval // reserved for future use
+	Ires      [9]sndInterval
 	Rmask     uint32
 	Cmask     uint32
 	Info      uint32
