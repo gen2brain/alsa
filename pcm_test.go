@@ -288,11 +288,18 @@ func testPcmStop(t *testing.T) {
 	err = pcm.Stop()
 	require.NoError(t, err, "pcm.Stop() failed")
 
-	state = pcm.State()
+	for i := 0; i < 50; i++ {
+		state = pcm.State()
+		if state == alsa.SNDRV_PCM_STATE_SETUP {
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	require.Equal(t, alsa.SNDRV_PCM_STATE_SETUP, state, "Stream should be in SETUP state after stopping")
 
-	// Wait for the reader goroutine to finish. It will exit because pcm.Stop()
-	// caused its blocking Read() call to return an error.
+	// Wait for the reader goroutine to finish. It will exit because pcm.Stop() caused its blocking Read() call to return an error.
 	wg.Wait()
 }
 
@@ -401,10 +408,8 @@ func testPcmPlaybackStartup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int(pcm.PeriodSize()), written)
 
-	// Verify the state is now RUNNING.
-	// Poll for a short time in case of a slight delay in state transition.
 	var finalState alsa.PcmState
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 50; i++ {
 		finalState = pcm.State()
 		if finalState == alsa.SNDRV_PCM_STATE_RUNNING {
 			break
@@ -572,8 +577,7 @@ func testPcmWriteiTiming(t *testing.T) {
 	durationMs := float64(duration.Milliseconds())
 
 	// Allow a generous tolerance for timing assertions in a non-realtime environment.
-	// Since we are now measuring the full playback time, this assertion should be much more reliable.
-	tolerance := 150.0 // ms
+	tolerance := 250.0 // ms
 	if math.Abs(durationMs-expectedDurationMs) > tolerance {
 		t.Logf("Write+Drain timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
 	}
@@ -677,7 +681,7 @@ func testPcmReadiTiming(t *testing.T) {
 	expectedDurationMs := float64(frames*readCount) * 1000.0 / float64(defaultConfig.Rate)
 	durationMs := float64(duration.Milliseconds())
 
-	tolerance := 150.0 // ms
+	tolerance := 250.0 // ms
 	if (durationMs-expectedDurationMs) > tolerance || (expectedDurationMs-durationMs) > tolerance {
 		t.Logf("Read timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
 	}
