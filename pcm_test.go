@@ -82,7 +82,7 @@ func TestPcmInvalidBuffers(t *testing.T) {
 
 	var emptySlice []int16
 	_, err = pcm.Write(emptySlice)
-	assert.Error(t, err, "Write with empty slice should fail")
+	assert.NoError(t, err, "Write with empty slice should succeed")
 }
 
 // TestPcmHardware runs all hardware-related tests sequentially to avoid race conditions

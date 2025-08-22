@@ -22,9 +22,9 @@ func (p *PCM) Write(data any) (int, error) {
 		return 0, fmt.Errorf("invalid data type for Write: %w", err)
 	}
 
-	frames := PcmBytesToFrames(p, dataByteLen)
-	if frames == 0 {
-		return 0, fmt.Errorf("invalid data for Write")
+	totalFrames := PcmBytesToFrames(p, dataByteLen)
+	if totalFrames == 0 {
+		return 0, nil
 	}
 
 	defer runtime.KeepAlive(data)
@@ -37,8 +37,9 @@ func (p *PCM) Write(data any) (int, error) {
 	}
 
 	framesWritten := uint32(0)
-	for framesWritten < frames {
-		remainingFrames := frames - framesWritten
+
+	for framesWritten < totalFrames {
+		remainingFrames := totalFrames - framesWritten
 		offsetBytes := PcmFramesToBytes(p, framesWritten)
 
 		xfer := sndXferi{
@@ -87,9 +88,9 @@ func (p *PCM) Read(data any) (int, error) {
 		return 0, fmt.Errorf("invalid data type for Read: %w", err)
 	}
 
-	frames := PcmBytesToFrames(p, dataByteLen)
-	if frames == 0 {
-		return 0, fmt.Errorf("invalid data for Read")
+	totalFrames := PcmBytesToFrames(p, dataByteLen)
+	if totalFrames == 0 {
+		return 0, nil
 	}
 
 	defer runtime.KeepAlive(data)
@@ -102,8 +103,9 @@ func (p *PCM) Read(data any) (int, error) {
 	}
 
 	framesRead := uint32(0)
-	for framesRead < frames {
-		remainingFrames := frames - framesRead
+
+	for framesRead < totalFrames {
+		remainingFrames := totalFrames - framesRead
 		offsetBytes := PcmFramesToBytes(p, framesRead)
 
 		xfer := sndXferi{

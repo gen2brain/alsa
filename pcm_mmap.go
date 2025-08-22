@@ -25,6 +25,11 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		return 0, fmt.Errorf("invalid data type for MmapWrite: %w", err)
 	}
 
+	totalFrames := PcmBytesToFrames(p, dataByteLen)
+	if totalFrames == 0 {
+		return 0, nil
+	}
+
 	defer runtime.KeepAlive(data)
 
 	s := p.State()
@@ -35,7 +40,6 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 	}
 
 	framesWritten := uint32(0)
-	totalFrames := PcmBytesToFrames(p, dataByteLen)
 
 	for framesWritten < totalFrames {
 		wantFrames := totalFrames - framesWritten
@@ -124,6 +128,11 @@ func (p *PCM) MmapRead(data any) (int, error) {
 		return 0, fmt.Errorf("invalid data type for MmapRead: %w", err)
 	}
 
+	totalFrames := PcmBytesToFrames(p, dataByteLen)
+	if totalFrames == 0 {
+		return 0, nil
+	}
+
 	defer runtime.KeepAlive(data)
 
 	s := p.State()
@@ -133,14 +142,13 @@ func (p *PCM) MmapRead(data any) (int, error) {
 		}
 	}
 
-	framesRead := uint32(0)
-	totalFrames := PcmBytesToFrames(p, dataByteLen)
-
 	if p.State() == SNDRV_PCM_STATE_PREPARED && totalFrames >= p.config.StartThreshold {
 		if err := p.Start(); err != nil {
-			return int(framesRead), err
+			return 0, err
 		}
 	}
+
+	framesRead := uint32(0)
 
 	for framesRead < totalFrames {
 		avail, availErr := p.AvailUpdate()
