@@ -5,6 +5,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/gen2brain/alsa"
 )
 
 var (
@@ -63,4 +68,54 @@ func TestMain(m *testing.M) {
 	loopbackCaptureDevice = 1
 
 	os.Exit(m.Run())
+}
+
+func TestEnumerateCards(t *testing.T) {
+	cards, err := alsa.EnumerateCards()
+	require.NoError(t, err, "EnumerateCards should not return an error")
+	require.NotEmpty(t, cards, "EnumerateCards should find at least one card")
+
+	for _, card := range cards {
+		fmt.Print(card.String())
+	}
+
+	foundLoopback := false
+	for _, card := range cards {
+		if card.ID == loopbackCard {
+			foundLoopback = true
+			assert.Equal(t, "Loopback", card.Name, "Loopback card name should be correct")
+			assert.True(t, len(card.Devices) >= 2, "Loopback card should have at least playback and capture devices")
+
+			foundPlayback := false
+			foundCapture := false
+
+			for _, device := range card.Devices {
+				if device.ID == loopbackPlaybackDevice && device.IsPlayback {
+					foundPlayback = true
+				}
+				if device.ID == loopbackCaptureDevice && !device.IsPlayback {
+					foundCapture = true
+				}
+			}
+
+			assert.True(t, foundPlayback, "Should find loopback playback device")
+			assert.True(t, foundCapture, "Should find loopback capture device")
+
+			break
+		}
+	}
+
+	assert.True(t, foundLoopback, "Should find the loopback card")
+
+	foundDummy := false
+	for _, card := range cards {
+		if card.ID == dummyCard {
+			foundDummy = true
+			assert.Equal(t, "Dummy", card.Name, "Dummy card name should be correct")
+
+			break
+		}
+	}
+
+	assert.True(t, foundDummy, "Should find the dummy card")
 }
