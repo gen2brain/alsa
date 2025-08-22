@@ -34,23 +34,23 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		}
 	}
 
-	offset := 0
-	remainingBytes := int(dataByteLen)
+	framesWritten := uint32(0)
+	totalFrames := PcmBytesToFrames(p, dataByteLen)
 
-	for remainingBytes > 0 {
-		wantFrames := PcmBytesToFrames(p, uint32(remainingBytes))
+	for framesWritten < totalFrames {
+		wantFrames := totalFrames - framesWritten
 		if wantFrames == 0 {
 			break
 		}
 
 		avail, availErr := p.AvailUpdate()
 		if availErr != nil {
-			return offset, fmt.Errorf("AvailUpdate failed: %w", availErr)
+			return int(framesWritten), fmt.Errorf("AvailUpdate failed: %w", availErr)
 		}
 
 		buffer, _, framesToCopy, _, err := p.mmapBegin(wantFrames)
 		if err != nil {
-			return offset, err
+			return int(framesWritten), err
 		}
 
 		if framesToCopy == 0 {
@@ -58,7 +58,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			timeout := -1
 
 			if (p.flags & PCM_NONBLOCK) != 0 {
-				return offset, syscall.EAGAIN
+				return int(framesWritten), syscall.EAGAIN
 			}
 
 			if (p.flags & PCM_NOIRQ) != 0 {
@@ -74,7 +74,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 
 			ready, waitErr := p.Wait(timeout)
 			if waitErr != nil {
-				return offset, fmt.Errorf("pcm wait failed: %w", waitErr)
+				return int(framesWritten), fmt.Errorf("pcm wait failed: %w", waitErr)
 			}
 
 			if !ready { // Timeout or stream not ready
@@ -86,26 +86,25 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 		}
 
 		bytesToCopy := int(PcmFramesToBytes(p, framesToCopy))
-		srcPtr := unsafe.Pointer(uintptr(dataPtr) + uintptr(offset))
+		offsetBytes := PcmFramesToBytes(p, framesWritten)
+		srcPtr := unsafe.Pointer(uintptr(dataPtr) + uintptr(offsetBytes))
 		srcSlice := unsafe.Slice((*byte)(srcPtr), bytesToCopy)
 		copy(buffer, srcSlice)
 
-		// Update offset and remainingBytes immediately after successful copy, before mmapCommit.
-		offset += bytesToCopy
-		remainingBytes -= bytesToCopy
+		framesWritten += framesToCopy
 
 		if err := p.mmapCommit(framesToCopy); err != nil {
-			return offset, err
+			return int(framesWritten), err
 		}
 
 		if p.State() == SNDRV_PCM_STATE_PREPARED && p.bufferSize-uint32(avail) >= p.config.StartThreshold {
 			if err := p.Start(); err != nil {
-				return offset, err
+				return int(framesWritten), err
 			}
 		}
 	}
 
-	return offset, nil
+	return int(framesWritten), nil
 }
 
 // MmapRead reads interleaved audio data from a capture MMAP PCM device.
@@ -134,29 +133,29 @@ func (p *PCM) MmapRead(data any) (int, error) {
 		}
 	}
 
-	offset := 0
-	remainingBytes := int(dataByteLen)
+	framesRead := uint32(0)
+	totalFrames := PcmBytesToFrames(p, dataByteLen)
 
-	if p.State() == SNDRV_PCM_STATE_PREPARED && PcmBytesToFrames(p, dataByteLen) >= p.config.StartThreshold {
+	if p.State() == SNDRV_PCM_STATE_PREPARED && totalFrames >= p.config.StartThreshold {
 		if err := p.Start(); err != nil {
-			return offset, err
+			return int(framesRead), err
 		}
 	}
 
-	for remainingBytes > 0 {
+	for framesRead < totalFrames {
 		avail, availErr := p.AvailUpdate()
 		if availErr != nil {
-			return offset, fmt.Errorf("AvailUpdate failed: %w", availErr)
+			return int(framesRead), fmt.Errorf("AvailUpdate failed: %w", availErr)
 		}
 
-		wantFrames := PcmBytesToFrames(p, uint32(remainingBytes))
+		wantFrames := totalFrames - framesRead
 		if wantFrames == 0 {
 			break
 		}
 
 		buffer, _, framesToCopy, _, err := p.mmapBegin(wantFrames)
 		if err != nil {
-			return offset, err
+			return int(framesRead), err
 		}
 
 		if framesToCopy == 0 {
@@ -164,7 +163,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 			timeout := -1
 
 			if (p.flags & PCM_NONBLOCK) != 0 {
-				return offset, syscall.EAGAIN
+				return int(framesRead), syscall.EAGAIN
 			}
 
 			if (p.flags & PCM_NOIRQ) != 0 {
@@ -180,7 +179,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 			ready, waitErr := p.Wait(timeout)
 			if waitErr != nil {
-				return offset, fmt.Errorf("pcm wait failed: %w", waitErr)
+				return int(framesRead), fmt.Errorf("pcm wait failed: %w", waitErr)
 			}
 
 			if !ready { // Timeout or stream not ready
@@ -191,20 +190,19 @@ func (p *PCM) MmapRead(data any) (int, error) {
 		}
 
 		bytesToCopy := int(PcmFramesToBytes(p, framesToCopy))
-		dstPtr := unsafe.Pointer(uintptr(dataPtr) + uintptr(offset))
+		offsetBytes := PcmFramesToBytes(p, framesRead)
+		dstPtr := unsafe.Pointer(uintptr(dataPtr) + uintptr(offsetBytes))
 		dstSlice := unsafe.Slice((*byte)(dstPtr), bytesToCopy)
 		copy(dstSlice, buffer)
 
-		// Update offset and remainingBytes immediately after successful copy, before mmapCommit.
-		offset += bytesToCopy
-		remainingBytes -= bytesToCopy
+		framesRead += framesToCopy
 
 		if err := p.mmapCommit(framesToCopy); err != nil {
-			return offset, err
+			return int(framesRead), err
 		}
 	}
 
-	return offset, nil
+	return int(framesRead), nil
 }
 
 // mmapBegin prepares for a memory-mapped transfer. It returns a slice of the main buffer corresponding to the available contiguous

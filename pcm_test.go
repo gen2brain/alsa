@@ -925,8 +925,9 @@ func testPcmMmapWrite(t *testing.T) {
 			t.Fatalf("MmapWrite failed on iteration %d: %v", i, err)
 		}
 
-		if written != len(buffer) {
-			t.Fatalf("MmapWrite wrote %d bytes, want %d", written, len(buffer))
+		expectedFrames := int(alsa.PcmBytesToFrames(pcm, uint32(len(buffer))))
+		if written != expectedFrames {
+			t.Fatalf("MmapWrite wrote %d frames, want %d", written, expectedFrames)
 		}
 	}
 
@@ -1137,7 +1138,8 @@ func testPcmMmapRead(t *testing.T) {
 				// should contain the generated signal.
 				energyMtx.Lock()
 				if !energyFound {
-					if energy(readBuffer[:read], playbackConfig.Format) > 0 {
+					bytesRead := alsa.PcmFramesToBytes(pcmIn, uint32(read))
+					if energy(readBuffer[:bytesRead], playbackConfig.Format) > 0 {
 						energyFound = true
 					}
 				}
@@ -1872,7 +1874,8 @@ func testPcmMmapLoopback(t *testing.T) {
 
 				energyMtx.Lock()
 				if !energyFound {
-					if energy(buffer[:read], playbackConfig.Format) > 0.0 {
+					bytesRead := alsa.PcmFramesToBytes(pcmIn, uint32(read))
+					if energy(buffer[:bytesRead], playbackConfig.Format) > 0.0 {
 						energyFound = true
 					}
 				}
@@ -1922,8 +1925,10 @@ func testPcmMmapLoopback(t *testing.T) {
 
 					return
 				}
-				if written != len(buffer) {
-					setPlaybackErr(fmt.Errorf("short mmap write on iteration %d: got %d, want %d", counter, written, len(buffer)))
+
+				expectedFrames := int(pcmOut.PeriodSize())
+				if written != expectedFrames {
+					setPlaybackErr(fmt.Errorf("short mmap write on iteration %d: got %d frames, want %d", counter, written, expectedFrames))
 
 					return
 				}
@@ -1974,7 +1979,7 @@ func testPcmMmapNonBlocking(t *testing.T) {
 		require.ErrorIs(t, err, syscall.EAGAIN, "Expected EAGAIN when MmapWrite fills the buffer")
 		// It should have written some data, but not more than the internal buffer size.
 		assert.Greater(t, written, 0, "MmapWrite should have written some data before returning EAGAIN")
-		assert.LessOrEqual(t, written, int(bufferSizeInBytes), "MmapWrite should not write more than the buffer size")
+		assert.LessOrEqual(t, written, int(pcm.BufferSize()), "MmapWrite should not write more frames than the buffer size")
 	})
 
 	t.Run("Read", func(t *testing.T) {
@@ -1989,8 +1994,8 @@ func testPcmMmapNonBlocking(t *testing.T) {
 		buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
 		read, err := pcm.MmapRead(buffer)
 
-		// Should return 0 bytes read and EAGAIN.
-		assert.Equal(t, 0, read, "MmapRead should return 0 bytes when no data is available")
+		// Should return 0 frames read and EAGAIN.
+		assert.Equal(t, 0, read, "MmapRead should return 0 frames when no data is available")
 		assert.ErrorIs(t, err, syscall.EAGAIN, "Expected EAGAIN when reading from an empty non-blocking mmap buffer")
 	})
 }

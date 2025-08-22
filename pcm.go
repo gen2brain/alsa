@@ -638,6 +638,8 @@ func (p *PCM) xrunRecover(err error) error {
 
 	if isEPIPE {
 		p.xruns++
+
+		return nil
 	}
 
 	if (p.flags & PCM_NORESTART) != 0 {
