@@ -96,6 +96,7 @@ func PcmOpen(card, device uint, flags PcmFlag, config *Config) (*PCM, error) {
 
 			return nil, fmt.Errorf("fcntl F_GETFL for %s failed: %w", path, err)
 		}
+
 		if _, err = unix.FcntlInt(file.Fd(), unix.F_SETFL, currentFlags&^syscall.O_NONBLOCK); err != nil {
 			_ = file.Close()
 
@@ -281,7 +282,10 @@ func (p *PCM) SetConfig(config *Config) error {
 	paramSetMin(hwParams, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, config.PeriodSize)
 	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_CHANNELS, config.Channels)
 	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_PERIODS, config.PeriodCount)
-	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_RATE, config.Rate)
+
+	// Use paramSetMin for Rate to be more flexible. This asks the driver for a rate
+	// of *at least* the requested value, allowing it to choose the nearest supported rate.
+	paramSetMin(hwParams, SNDRV_PCM_HW_PARAM_RATE, config.Rate)
 
 	if (p.flags & PCM_NOIRQ) != 0 {
 		if (p.flags & PCM_MMAP) == 0 {
@@ -567,7 +571,7 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 	return true, nil
 }
 
-// State returns the current cached state of the PCM stream.
+// State returns the current state of the PCM stream.
 func (p *PCM) State() PcmState {
 	// Try the fast path first: sync pointers and read the state from shared memory.
 	// This is most effective for MMAP streams but is attempted for all.
