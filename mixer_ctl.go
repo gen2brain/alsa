@@ -74,16 +74,6 @@ func (ctl *MixerCtl) Type() MixerCtlType {
 		return SNDRV_CTL_ELEM_TYPE_UNKNOWN
 	}
 
-	// This is a workaround for drivers that report a control as ENUMERATED
-	// but provide no item names. These are often misreported INTEGER controls.
-	// A non-zero `max` in the integer union is a strong indicator.
-	if MixerCtlType(ctl.info.Typ) == SNDRV_CTL_ELEM_TYPE_ENUMERATED {
-		intInfo := (*integer)(unsafe.Pointer(&ctl.info.Value[0]))
-		if intInfo.Max != 0 {
-			return SNDRV_CTL_ELEM_TYPE_INTEGER
-		}
-	}
-
 	return MixerCtlType(ctl.info.Typ)
 }
 
