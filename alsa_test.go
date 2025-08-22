@@ -76,7 +76,7 @@ func TestEnumerateCards(t *testing.T) {
 	require.NotEmpty(t, cards, "EnumerateCards should find at least one card")
 
 	for _, card := range cards {
-		fmt.Print(card.String())
+		t.Log(card.String())
 	}
 
 	foundLoopback := false
