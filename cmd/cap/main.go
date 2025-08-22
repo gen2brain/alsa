@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -94,13 +93,6 @@ func main() {
 	}
 	defer pcm.Close()
 
-	// A stream must be in the PREPARED state before it can be read from.
-	// This is especially critical for MMAP streams.
-	if err := pcm.Prepare(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error preparing ALSA device: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Create the output WAV file.
 	wavFile, err := os.Create(outputPath)
 	if err != nil {
@@ -157,12 +149,9 @@ func main() {
 			}
 
 			if readErr != nil {
-				// The library's I/O functions attempt to recover from overruns (EPIPE),
+				// The library's I/O functions attempt to recover from overruns,
 				// so if we get an error here, it's likely unrecoverable.
 				fmt.Fprintf(os.Stderr, "Error reading from ALSA device: %v\n", readErr)
-				if errors.Is(readErr, syscall.EPIPE) {
-					fmt.Fprintln(os.Stderr, "Got EPIPE (overrun), and recovery failed.")
-				}
 
 				keepRunning = false
 
@@ -191,11 +180,6 @@ func main() {
 				framesCaptured += framesReadInChunk
 			}
 		}
-	}
-
-	// For MMAP, explicitly stop the stream before closing.
-	if mmap {
-		pcm.Stop()
 	}
 
 	durationCaptured := time.Duration(float64(framesCaptured)/float64(config.Rate)) * time.Second

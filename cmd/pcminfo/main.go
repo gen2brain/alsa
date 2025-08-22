@@ -48,7 +48,6 @@ func main() {
 	fmt.Printf("PCM card %d, device %d, stream %s:\n", card, device, stream)
 
 	// Get the hardware parameters for the specified PCM device.
-	// This is the core call to the alsa library to query capabilities.
 	params, err := alsa.PcmParamsGet(uint(card), uint(device), pcmFlags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting PCM parameters: %v\n", err)
