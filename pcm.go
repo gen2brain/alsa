@@ -159,14 +159,15 @@ func (p *PCM) Close() error {
 
 	if (p.flags & PCM_MMAP) != 0 {
 		_ = p.Stop()
-	}
 
-	if p.mmapBuffer != nil {
-		_ = unix.Munmap(p.mmapBuffer)
-		p.mmapBuffer = nil
+		if p.mmapBuffer != nil {
+			_ = unix.Munmap(p.mmapBuffer)
+			p.mmapBuffer = nil
+		}
 	}
 
 	err := p.file.Close()
+	p.bufferSize = 0
 	p.file = nil
 
 	return err
@@ -277,14 +278,10 @@ func (p *PCM) SetConfig(config *Config) error {
 	paramInit(hwParams)
 
 	paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_FORMAT, uint32(config.Format))
-	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_CHANNELS, config.Channels)
-
-	// Use paramSetMin for Rate to be more flexible. This asks the driver for a rate
-	// of *at least* the requested value, allowing it to choose the nearest supported rate.
-	paramSetMin(hwParams, SNDRV_PCM_HW_PARAM_RATE, config.Rate)
-
-	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_PERIODS, config.PeriodCount)
 	paramSetMin(hwParams, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, config.PeriodSize)
+	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_CHANNELS, config.Channels)
+	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_PERIODS, config.PeriodCount)
+	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_RATE, config.Rate)
 
 	if (p.flags & PCM_NOIRQ) != 0 {
 		if (p.flags & PCM_MMAP) == 0 {
@@ -308,13 +305,13 @@ func (p *PCM) SetConfig(config *Config) error {
 	}
 
 	// Update our config with the refined parameters from the driver.
-	p.config.Channels = paramGetInt(hwParams, SNDRV_PCM_HW_PARAM_CHANNELS)
-	p.config.Rate = paramGetInt(hwParams, SNDRV_PCM_HW_PARAM_RATE)
 	p.config.PeriodSize = paramGetInt(hwParams, SNDRV_PCM_HW_PARAM_PERIOD_SIZE)
 	p.config.PeriodCount = paramGetInt(hwParams, SNDRV_PCM_HW_PARAM_PERIODS)
 	p.bufferSize = p.config.PeriodSize * p.config.PeriodCount
+	p.config.Channels = paramGetInt(hwParams, SNDRV_PCM_HW_PARAM_CHANNELS)
+	p.config.Rate = paramGetInt(hwParams, SNDRV_PCM_HW_PARAM_RATE)
 
-	// Mmap the data buffer after setting HW/SW_PARAMS, matching the standard ALSA flow (and tinyalsa).
+	// Mmap the data buffer after setting HW/SW_PARAMS.
 	if (p.flags & PCM_MMAP) != 0 {
 		frameSize := PcmFormatToBits(p.config.Format) / 8 * p.config.Channels
 		mmapLen := int(p.bufferSize * uint32(frameSize))
@@ -360,24 +357,23 @@ func (p *PCM) SetConfig(config *Config) error {
 		}
 		p.config.StartThreshold = uint32(swParams.StartThreshold)
 	} else {
-		p.config.StartThreshold = config.StartThreshold
+		swParams.StartThreshold = sndPcmUframesT(config.StartThreshold)
 	}
 
 	if config.StopThreshold == 0 {
 		if (p.flags & PCM_IN) != 0 {
 			swParams.StopThreshold = sndPcmUframesT(config.PeriodCount * config.PeriodSize * 10)
 		} else {
-			swParams.StopThreshold = sndPcmUframesT(config.PeriodCount * config.PeriodSize * 10)
+			swParams.StopThreshold = sndPcmUframesT(config.PeriodCount * config.PeriodSize)
 		}
 		p.config.StopThreshold = uint32(swParams.StopThreshold)
 	} else {
-		p.config.StopThreshold = config.StopThreshold
+		swParams.StopThreshold = sndPcmUframesT(config.StopThreshold)
 	}
-	swParams.StopThreshold = sndPcmUframesT(p.config.StopThreshold)
 
 	swParams.XferAlign = sndPcmUframesT(config.PeriodSize / 2) // Needed for old kernels
-	swParams.SilenceThreshold = sndPcmUframesT(config.SilenceThreshold)
 	swParams.SilenceSize = sndPcmUframesT(config.SilenceSize)
+	swParams.SilenceThreshold = sndPcmUframesT(config.SilenceThreshold)
 
 	if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_SW_PARAMS, uintptr(unsafe.Pointer(swParams))); err != nil {
 		return fmt.Errorf("ioctl SW_PARAMS (write) failed: %w", err)

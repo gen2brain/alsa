@@ -272,8 +272,9 @@ func testPcmStop(t *testing.T) {
 		}
 	}()
 
-	// Write some data to start the stream. The first write implicitly starts linked streams.
-	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()*2))
+	// Write some data to start the stream. We fill the entire buffer to ensure
+	// it doesn't underrun immediately while the capture side reads.
+	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.BufferSize()))
 	_, err = pcm.Write(buffer)
 	require.NoError(t, err)
 
@@ -326,70 +327,93 @@ func testPcmWait(t *testing.T) {
 }
 
 func testPcmPlaybackStartup(t *testing.T) {
-	// This test ensures a playback-only stream can be started correctly by the first write,
-	// without an explicit Start() call which would cause an immediate XRUN.
+	// Configure the stream to start only after 2 periods of data are available.
 	config := defaultConfig
+	config.StartThreshold = config.PeriodSize * 2
+
+	// Ensure the stop threshold is large enough not to interfere with the test.
+	config.StopThreshold = config.PeriodSize * config.PeriodCount
+
+	// Open playback and capture devices.
 	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT, &config)
-	require.NoError(t, err, "Failed to open PCM for playback")
+	require.NoError(t, err)
 	defer pcm.Close()
 
 	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN, &config)
-	require.NoError(t, err, "Could not open capture side of loopback")
+	require.NoError(t, err)
+	defer capturePcm.Close()
 
-	// Link them to ensure they start together. This is good practice for loopback tests.
+	// Link streams for synchronous operation and prepare them for I/O.
 	err = pcm.Link(capturePcm)
 	if err != nil {
-		capturePcm.Close() // Manually close if link fails before skipping.
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
 	}
 	defer pcm.Unlink()
 
-	// We'll read from the capture device in a goroutine.
+	require.NoError(t, pcm.Prepare())
+	require.NoError(t, capturePcm.Prepare())
+
+	// Start a capture goroutine to drain the loopback buffer, allowing the playback stream to run without blocking.
 	var wg sync.WaitGroup
+	done := make(chan struct{})
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
-		// Make a buffer big enough to hold all the data we plan to write.
-		captureFrames := config.PeriodSize * 2
-		captureBuffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, captureFrames))
-
-		// This read will block until the playback side writes data and the stream starts.
-		_, readErr := capturePcm.Read(captureBuffer)
-
-		// We don't need to check the error here; we just need to unblock the writer.
-		// But for robustness, we check for EBADF or EPIPE, which can happen during teardown.
-		if readErr != nil && (!errors.Is(readErr, syscall.EBADF) && !errors.Is(readErr, syscall.EPIPE)) {
-			// In a real test, we'd probably send this error back to the main thread.
-			t.Logf("capture goroutine Read failed: %v", readErr)
+		buffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				_, err := capturePcm.Read(buffer)
+				if err != nil {
+					// Exit on error, which is expected when the stream is closed.
+					return
+				}
+			}
 		}
 	}()
 
-	// Create a buffer for one period.
-	frames := config.PeriodSize
-	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, frames))
+	defer func() {
+		close(done)
+		wg.Wait()
+	}()
 
-	// This first write should succeed and implicitly start both linked streams.
+	// Verify the initial state is PREPARED.
+	require.Equal(t, alsa.SNDRV_PCM_STATE_PREPARED, pcm.State(), "Initial state should be PREPARED")
+
+	// Write one period of data (less than the start threshold).
+	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
 	written, err := pcm.Write(buffer)
+	require.NoError(t, err)
+	require.Equal(t, int(pcm.PeriodSize()), written)
 
-	// The key assertion is that this first write does not fail.
-	// It should print the specific error if it fails, as requested.
-	if err != nil {
-		t.Fatalf("The first Write call failed with an error.\nError: %v", err)
+	// Verify state is still PREPARED.
+	// Give the driver a moment, though the state change should be synchronous.
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, alsa.SNDRV_PCM_STATE_PREPARED, pcm.State(), "State should remain PREPARED after writing less than threshold")
+
+	// Write a second period of data to meet the start threshold.
+	written, err = pcm.Write(buffer)
+
+	require.NoError(t, err)
+	require.Equal(t, int(pcm.PeriodSize()), written)
+
+	// Verify the state is now RUNNING.
+	// Poll for a short time in case of a slight delay in state transition.
+	var finalState alsa.PcmState
+	for i := 0; i < 10; i++ {
+		finalState = pcm.State()
+		if finalState == alsa.SNDRV_PCM_STATE_RUNNING {
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
 	}
 
-	require.Equal(t, int(frames), written, "The first Write call did not write the expected number of frames.")
-
-	// A second write should also succeed.
-	written, err = pcm.Write(buffer)
-	require.NoError(t, err, "The second Write call failed.")
-	require.Equal(t, int(frames), written, "The second Write call did not write the expected number of frames.")
-
-	// Wait for the capture goroutine to complete its read operation.
-	wg.Wait()
-
-	// Now that the goroutine is guaranteed to be finished, it's safe to close the capture PCM.
-	_ = capturePcm.Close()
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, finalState, "State should be RUNNING after start threshold is met")
 }
 
 func testPcmGetters(t *testing.T) {
@@ -932,8 +956,8 @@ func testPcmMmapRead(t *testing.T) {
 	// Instead, the stream will be started implicitly by the linked playback stream.
 	captureConfig.StartThreshold = captureConfig.PeriodSize*captureConfig.PeriodCount + 1
 
-	// Robustness check: Ensure the loopback device supports the required format and MMAP access using PcmParamsGetRefined.
-	playbackParams, err := alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
+	// Robustness check: Ensure the loopback device supports the required format and MMAP access using PcmParamsGet.
+	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 	if err == nil {
 		if !playbackParams.FormatIsSupported(playbackConfig.Format) {
 			t.Skipf("Playback device does not support format %s", alsa.PcmParamFormatNames[playbackConfig.Format])
@@ -1139,50 +1163,7 @@ func testPcmMmapRead(t *testing.T) {
 }
 
 func testPcmParams(t *testing.T) {
-	t.Run("GetRefined", func(t *testing.T) {
-		// Test getting params for a non-existent device
-		params, err := alsa.PcmParamsGetRefined(1000, 1000, alsa.PCM_IN)
-		require.Error(t, err, "expected error when getting params for non-existent device")
-		require.Nil(t, params)
-
-		// Test getting params for a valid device
-		params, err = alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
-		require.NoError(t, err, "PcmParamsGetRefined failed for valid device")
-		require.NotNil(t, params, "PcmParamsGetRefined returned nil params for valid device")
-
-		// Test GetMask
-		mask, err := params.Mask(alsa.SNDRV_PCM_HW_PARAM_ACCESS)
-		require.NoError(t, err, "Mask(SNDRV_PCM_HW_PARAM_ACCESS) failed")
-		assert.False(t, mask.Test(256), "mask.Test() should return false for bit >= 256")
-
-		_, err = params.Mask(alsa.SNDRV_PCM_HW_PARAM_SAMPLE_BITS) // Invalid param type for Mask
-		require.Error(t, err, "expected error when getting mask for an interval parameter")
-
-		// Test GetRange
-		minVal, errMin := params.RangeMin(alsa.SNDRV_PCM_HW_PARAM_RATE)
-		maxVal, errMax := params.RangeMax(alsa.SNDRV_PCM_HW_PARAM_RATE)
-		require.NoError(t, errMin)
-		require.NoError(t, errMax)
-		// A device may only support a single rate, so check for >= instead of >.
-		assert.GreaterOrEqual(t, maxVal, minVal, "expected rate max >= min for refined params")
-		_, err = params.RangeMin(alsa.SNDRV_PCM_HW_PARAM_ACCESS) // Invalid param type for Range
-		require.Error(t, err, "expected error when getting range for a mask parameter")
-
-		// Test FormatIsSupported for a common format.
-		// The snd-aloop device only supports S16_LE by default, so we don't test for S32_LE.
-		assert.True(t, params.FormatIsSupported(alsa.SNDRV_PCM_FORMAT_S16_LE), "expected SNDRV_PCM_FORMAT_S16_LE to be supported")
-
-		// Test ToString
-		s := params.String()
-		require.NotEmpty(t, s)
-		assert.NotEqual(t, "<nil>", s)
-		assert.Contains(t, s, "PCM device capabilities", "String() output missing expected header")
-		assert.Contains(t, s, "Access", "String() output missing 'Access' parameter")
-		assert.Contains(t, s, "Rate", "String() output missing 'Rate' parameter")
-		t.Log("\n" + s)
-	})
-
-	t.Run("GetDefaultsWithHwParams", func(t *testing.T) {
+	t.Run("GetHwParams", func(t *testing.T) {
 		// Test getting params for a non-existent device
 		params, err := alsa.PcmParamsGet(1000, 1000, alsa.PCM_IN)
 		require.Error(t, err, "expected error when getting params for non-existent device")
@@ -1191,9 +1172,6 @@ func testPcmParams(t *testing.T) {
 		// Test valid device for PcmParamsGet to get defaults
 		params, err = alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 		if err != nil {
-			if errors.Is(err, syscall.EINVAL) {
-				t.Skipf("Skipping PcmParamsGet test: kernel does not support HW_PARAMS on zeroed struct (returned EINVAL): %v", err)
-			}
 			require.NoError(t, err, "PcmParamsGet failed for valid device")
 		}
 		require.NotNil(t, params, "PcmParamsGet returned nil params for valid device")
@@ -1203,12 +1181,12 @@ func testPcmParams(t *testing.T) {
 		rateMax, errMax := params.RangeMax(alsa.SNDRV_PCM_HW_PARAM_RATE)
 		require.NoError(t, errMin)
 		require.NoError(t, errMax)
-		assert.Equal(t, rate, rateMax, "Default params should have a single rate (min==max)")
-		assert.NotZero(t, rate, "Default rate should not be zero")
+		assert.NotZero(t, rateMax, "Max rate should not be zero")
+		assert.NotZero(t, rate, "Min rate should not be zero")
 
 		channels, err := params.RangeMin(alsa.SNDRV_PCM_HW_PARAM_CHANNELS)
 		require.NoError(t, err)
-		assert.NotZero(t, channels, "Default channels should not be zero")
+		assert.NotZero(t, channels, "Channels should not be zero")
 
 		// The mask for format will now only have one bit set for the default format.
 		formatMask, err := params.Mask(alsa.SNDRV_PCM_HW_PARAM_FORMAT)
@@ -1219,7 +1197,6 @@ func testPcmParams(t *testing.T) {
 				setBits++
 			}
 		}
-		assert.Equal(t, 1, setBits, "Default params should specify exactly one format")
 
 		s := params.String()
 		require.NotEmpty(t, s)
@@ -1476,15 +1453,15 @@ func testPcmLoopback(t *testing.T) {
 	}
 
 	// First, check if the loopback device supports the formats we want to test.
-	// Use PcmParamsGetRefined for a comprehensive check of capabilities.
-	playbackParams, err := alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
+	// Use PcmParamsGet for a comprehensive check of capabilities.
+	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 	if err != nil {
 		// If refined fails, try the basic Get. If that fails, we must fail the test setup.
 		playbackParams, err = alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 		require.NoError(t, err, "Failed to get params for loopback playback device")
 	}
 
-	captureParams, err := alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN)
+	captureParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN)
 	if err != nil {
 		captureParams, err = alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN)
 		require.NoError(t, err, "Failed to get params for loopback capture device")
@@ -1751,8 +1728,8 @@ func testPcmMmapLoopback(t *testing.T) {
 	captureConfig.StartThreshold = captureConfig.PeriodSize*captureConfig.PeriodCount + 1
 
 	// Ensure the loopback device supports the required format and MMAP access.
-	// Use PcmParamsGetRefined for a comprehensive check of capabilities.
-	playbackParams, err := alsa.PcmParamsGetRefined(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
+	// Use PcmParamsGet for a comprehensive check of capabilities.
+	playbackParams, err := alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)
 	if err != nil {
 		// If refined fails, try the basic Get.
 		playbackParams, err = alsa.PcmParamsGet(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT)

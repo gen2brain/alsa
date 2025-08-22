@@ -38,36 +38,6 @@ func PcmParamsGet(card, device uint, flags PcmFlag) (*PcmParams, error) {
 	paramInit(hwParams)
 
 	// HW_PARAMS will fill the struct with default parameters.
-	if err := ioctl(file.Fd(), SNDRV_PCM_IOCTL_HW_PARAMS, uintptr(unsafe.Pointer(hwParams))); err != nil {
-		return nil, fmt.Errorf("ioctl HW_PARAMS failed: %w", err)
-	}
-
-	return &PcmParams{params: hwParams}, nil
-}
-
-// PcmParamsGetRefined queries the hardware parameters for a given PCM device to discover its full range of capabilities.
-// This function initializes the parameters and then uses the SNDRV_PCM_IOCTL_HW_REFINE ioctl to ask the kernel to restrict
-// the ranges to what the hardware actually supports.
-func PcmParamsGetRefined(card, device uint, flags PcmFlag) (*PcmParams, error) {
-	var streamChar byte
-	if (flags & PCM_IN) != 0 {
-		streamChar = 'c'
-	} else {
-		streamChar = 'p'
-	}
-
-	path := fmt.Sprintf("/dev/snd/pcmC%dD%d%c", card, device, streamChar)
-
-	// Use O_NONBLOCK on open to avoid getting stuck
-	file, err := os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open PCM device %s for query: %w", path, err)
-	}
-	defer file.Close()
-
-	hwParams := &sndPcmHwParams{}
-	paramInit(hwParams)
-
 	if err := ioctl(file.Fd(), SNDRV_PCM_IOCTL_HW_REFINE, uintptr(unsafe.Pointer(hwParams))); err != nil {
 		return nil, fmt.Errorf("ioctl HW_REFINE failed: %w", err)
 	}
@@ -213,33 +183,19 @@ func (pp *PcmParams) String() string {
 
 // paramInit initializes a sndPcmHwParams struct to allow all possible values.
 func paramInit(p *sndPcmHwParams) {
-	// Initialize all masks (including reserved) to all-ones.
 	for n := range p.Masks {
 		for i := range p.Masks[n].Bits {
 			p.Masks[n].Bits[i] = ^uint32(0)
 		}
 	}
 
-	for n := range p.Mres {
-		for i := range p.Mres[n].Bits {
-			p.Mres[n].Bits[i] = ^uint32(0)
-		}
-	}
-
-	// Initialize all intervals (including reserved) to the full range.
 	for n := range p.Intervals {
 		p.Intervals[n].MinVal = 0
 		p.Intervals[n].MaxVal = ^uint32(0)
-		p.Intervals[n].Flags = 0
-	}
-
-	for n := range p.Ires {
-		p.Ires[n].MinVal = 0
-		p.Ires[n].MaxVal = ^uint32(0)
-		p.Ires[n].Flags = 0
 	}
 
 	p.Rmask = ^uint32(0)
+	p.Cmask = 0
 	p.Info = ^uint32(0)
 }
 
