@@ -574,8 +574,7 @@ func (p *PCM) Wait(timeoutMs int) (bool, error) {
 // State returns the current state of the PCM stream.
 func (p *PCM) State() PcmState {
 	// Try the fast path first: sync pointers and read the state from shared memory.
-	// This is most effective for MMAP streams but is attempted for all.
-	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_HWSYNC); err == nil {
+	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_APPL | SNDRV_PCM_SYNC_PTR_AVAIL_MIN); err == nil {
 		// On success, we can read the state from the (potentially mmapped) status struct.
 		return PcmState(atomic.LoadInt32((*int32)(unsafe.Pointer(&p.mmapStatus.State))))
 	}
@@ -723,22 +722,16 @@ func (p *PCM) syncPtr(flags uint32) error {
 		return fmt.Errorf("sync pointer not initialized")
 	}
 
-	if !p.isMmapped { // Fallback case, uses SYNC_PTR ioctl
-		p.syncPointer.Flags = flags
-		if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_SYNC_PTR, uintptr(unsafe.Pointer(p.syncPointer))); err != nil {
-			return err
-		}
-	} else {
-		if (flags & SNDRV_PCM_SYNC_PTR_APPL) != 0 {
-			p.syncPointer.Flags = flags
-			if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_SYNC_PTR, uintptr(unsafe.Pointer(p.syncPointer))); err != nil {
-				return err
-			}
-		} else if (flags & SNDRV_PCM_SYNC_PTR_HWSYNC) != 0 {
-			// If only HWSYNC is needed, the more lightweight ioctl is sufficient.
+	if p.isMmapped {
+		if (flags & SNDRV_PCM_SYNC_PTR_HWSYNC) != 0 {
 			if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_HWSYNC, 0); err != nil {
 				return err
 			}
+		}
+	} else { // Fallback case, uses SYNC_PTR ioctl
+		p.syncPointer.Flags = flags
+		if err := ioctl(p.file.Fd(), SNDRV_PCM_IOCTL_SYNC_PTR, uintptr(unsafe.Pointer(p.syncPointer))); err != nil {
+			return err
 		}
 	}
 
