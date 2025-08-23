@@ -1,4 +1,7 @@
-// Package alsa provides a Go interface to the Linux ALSA subsystem, modeled after the tinyalsa library.
+// Package alsa provides a Go interface to the Linux ALSA subsystem, modeled after the TinyALSA library.
+//
+// It offers low-level, direct access to sound hardware devices without relying on the alsa-lib library.
+// This package communicates with the ALSA kernel drivers primarily through ioctl syscalls.
 package alsa
 
 // PcmFormat defines the sample format for a PCM stream.
