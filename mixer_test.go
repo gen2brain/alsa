@@ -20,9 +20,9 @@ import (
 //
 // sudo modprobe snd-dummy
 //
-// This creates virtual dummy sound cards that allow testing controls.
+// This creates virtual dummy sound card that allows testing controls.
 
-// TestMixerHardware runs all hardware-related tests sequentially to avoid race conditions.
+// TestMixerHardware runs all hardware-related tests sequentially.
 func TestMixerHardware(t *testing.T) {
 	t.Run("OpenAndClose", testMixerOpenAndClose)
 	t.Run("Functionality", testMixerFunctionality)
@@ -498,11 +498,10 @@ func testIntegerCtl(t *testing.T, ctl *alsa.MixerCtl) {
 }
 
 func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
-	// 1. Test NumEnums
+	// Test NumEnums
 	numEnums, err := ctl.NumEnums()
 	if err != nil || numEnums == 0 {
 		// This can happen if a control is misidentified as ENUM.
-		// mixer.go has a workaround for this, but if we still get here, just skip.
 		t.Logf("Skipping enum test for '%s': ctl.NumEnums() failed or returned 0: %v", ctl.Name(), err)
 
 		return
@@ -510,7 +509,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 
 	assert.Greater(t, numEnums, uint32(0))
 
-	// 2. Test AllEnumStrings and EnumString
+	// Test AllEnumStrings and EnumString
 	allEnums, err := ctl.AllEnumStrings()
 	require.NoError(t, err, "AllEnumStrings() should not fail for ctl '%s'", ctl.Name())
 	require.Equal(t, int(numEnums), len(allEnums), "AllEnumStrings() length should match NumEnums() for ctl '%s'", ctl.Name())
@@ -527,7 +526,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 	_, err = ctl.EnumString(uint(numEnums))
 	assert.Error(t, err, "EnumString() with out-of-bounds index should fail for ctl '%s'", ctl.Name())
 
-	// 3. Test reading values
+	// Test reading values
 	isReadable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_READ)) != 0
 	if !isReadable {
 		t.Logf("Skipping enum value read/write tests for '%s' as it's not readable", ctl.Name())
@@ -549,7 +548,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 		assert.Equal(t, expectedStr, valStr, "EnumValueString result should match EnumString(Value) for ctl '%s'", ctl.Name())
 	}
 
-	// 4. Test writing values
+	// Test writing values
 	isWritable := (ctl.Access() & uint32(alsa.SNDRV_CTL_ELEM_ACCESS_WRITE)) != 0
 	if !isWritable {
 		t.Logf("Skipping enum write test for '%s' as it's not writable", ctl.Name())
@@ -592,7 +591,7 @@ func testEnumCtl(t *testing.T, ctl *alsa.MixerCtl) {
 		return
 	}
 
-	// 5. Test SetEnumByString
+	// Test SetEnumByString
 	err = ctl.SetEnumByString(targetStr)
 	require.NoError(t, err, "SetEnumByString failed for value '%s' on ctl '%s'", targetStr, ctl.Name())
 
@@ -672,7 +671,6 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 
 	err := m.SubscribeEvents(true)
 	if err != nil {
-		// Handle dummy devices that don't support event subscription.
 		if errors.Is(err, syscall.ENOTTY) {
 			t.Skipf("Skipping event test: device does not support event subscription (ENOTTY)")
 
@@ -714,6 +712,7 @@ func testMixerEvents(t *testing.T, m *alsa.Mixer) {
 		t.Skipf("Skipping event test: cannot get value for ctl '%s': %v", targetCtl.Name(), err)
 		return
 	}
+
 	// Defer the restoration of the original value.
 	defer func() {
 		err := targetCtl.SetValue(0, originalVal)
