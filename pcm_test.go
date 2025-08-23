@@ -262,7 +262,6 @@ func testPcmStop(t *testing.T) {
 
 	// Explicitly prepare streams for predictable behavior.
 	require.NoError(t, pcm.Prepare())
-	require.NoError(t, capturePcm.Prepare())
 
 	var wg sync.WaitGroup
 	// Add synchronization to ensure the reader is ready.
@@ -378,20 +377,18 @@ func testPcmPlaybackStartup(t *testing.T) {
 
 	// Link streams for synchronous operation and prepare them for I/O.
 	err = pcm.Link(capturePcm)
-	linkSucceeded := err == nil
-	if !linkSucceeded {
+	if err != nil {
 		pcm.Close()
 		capturePcm.Close()
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
 	}
 
 	require.NoError(t, pcm.Prepare())
-	require.NoError(t, capturePcm.Prepare())
 
 	// Start a capture goroutine to drain the loopback buffer, allowing the playback stream to run without blocking.
 	var wg sync.WaitGroup
 	done := make(chan struct{})
-	// Add synchronization channel.
+	// Add a synchronization channel.
 	readyToRead := make(chan struct{})
 	wg.Add(1)
 
@@ -428,10 +425,7 @@ func testPcmPlaybackStartup(t *testing.T) {
 		wg.Wait() // Wait for the goroutine to exit cleanly.
 
 		// Unlink and close.
-		if linkSucceeded {
-			_ = pcm.Unlink()
-		}
-
+		_ = pcm.Unlink()
 		_ = pcm.Close()
 		_ = capturePcm.Close()
 	}()
@@ -547,8 +541,7 @@ func testPcmWriteTiming(t *testing.T) {
 
 	// Link the streams to start them synchronously.
 	err = pcm.Link(capturePcm)
-	linkSucceeded := err == nil
-	if !linkSucceeded {
+	if err != nil {
 		pcm.Close()
 		capturePcm.Close()
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
@@ -556,7 +549,6 @@ func testPcmWriteTiming(t *testing.T) {
 
 	// Prepare explicitly.
 	require.NoError(t, pcm.Prepare())
-	require.NoError(t, capturePcm.Prepare())
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -629,9 +621,7 @@ func testPcmWriteTiming(t *testing.T) {
 		captureErrMtx.Unlock()
 
 		// Cleanup resources.
-		if linkSucceeded {
-			_ = pcm.Unlink()
-		}
+		_ = pcm.Unlink()
 		_ = pcm.Close()
 		_ = capturePcm.Close()
 	}()
@@ -729,8 +719,7 @@ func testPcmReadTiming(t *testing.T) {
 
 	// Link the streams to start them synchronously.
 	err = playbackPcm.Link(pcm)
-	linkSucceeded := err == nil
-	if !linkSucceeded {
+	if err != nil {
 		pcm.Close()
 		playbackPcm.Close()
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
@@ -738,7 +727,6 @@ func testPcmReadTiming(t *testing.T) {
 
 	// Prepare explicitly.
 	require.NoError(t, playbackPcm.Prepare())
-	require.NoError(t, pcm.Prepare())
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -812,9 +800,7 @@ func testPcmReadTiming(t *testing.T) {
 		writerErrMtx.Unlock()
 
 		// Cleanup resources.
-		if linkSucceeded {
-			_ = playbackPcm.Unlink()
-		}
+		_ = playbackPcm.Unlink()
 		_ = pcm.Close()
 		_ = playbackPcm.Close()
 	}()
@@ -886,7 +872,6 @@ func testPcmReadWriteSimple(t *testing.T) {
 
 	// Prepare explicitly.
 	require.NoError(t, pcmOut.Prepare())
-	require.NoError(t, pcmIn.Prepare())
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -1050,9 +1035,8 @@ func testPcmMmapWrite(t *testing.T) {
 	}
 	defer pcm.Unlink()
 
-	// For MMAP, streams must be explicitly prepared.
+	// Prepare explicitly.
 	require.NoError(t, pcm.Prepare(), "playback stream prepare failed")
-	require.NoError(t, capturePcm.Prepare(), "capture stream prepare failed")
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -1208,8 +1192,8 @@ func testPcmMmapRead(t *testing.T) {
 	}
 	defer pcmOut.Unlink()
 
+	// Prepare explicitly.
 	require.NoError(t, pcmOut.Prepare(), "playback stream prepare failed")
-	require.NoError(t, pcmIn.Prepare(), "capture stream prepare failed")
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -1488,7 +1472,6 @@ func testPcmDrain(t *testing.T) {
 
 	// Prepare explicitly.
 	require.NoError(t, pcm.Prepare())
-	require.NoError(t, capturePcm.Prepare())
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -1627,9 +1610,8 @@ func testPcmPause(t *testing.T) {
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
 	}
 
-	// Prepare is good practice before starting I/O.
+	// Prepare explicitly.
 	require.NoError(t, pcm.Prepare(), "playback stream prepare failed")
-	require.NoError(t, capturePcm.Prepare(), "capture stream prepare failed")
 
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -1838,9 +1820,8 @@ func testPcmLoopback(t *testing.T) {
 			}
 			defer pcmOut.Unlink()
 
-			// Explicitly prepare before starting goroutines for stability.
+			// Prepare explicitly.
 			require.NoError(t, pcmOut.Prepare(), "playback stream prepare failed")
-			require.NoError(t, pcmIn.Prepare(), "capture stream prepare failed")
 
 			var wg sync.WaitGroup
 			done := make(chan struct{})
@@ -2088,9 +2069,8 @@ func testPcmMmapLoopback(t *testing.T) {
 	}
 	defer pcmOut.Unlink()
 
-	// For MMAP, streams must be explicitly prepared.
+	// Prepare explicitly.
 	require.NoError(t, pcmOut.Prepare(), "playback stream prepare failed")
-	require.NoError(t, pcmIn.Prepare(), "capture stream prepare failed")
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -2302,106 +2282,6 @@ func testPcmMmapNonBlocking(t *testing.T) {
 	})
 }
 
-// sineToneGenerator is a helper for audio tests that generates a sine wave.
-type sineToneGenerator struct {
-	phases []float64
-	gain   float64
-	step   float64
-	format alsa.PcmFormat
-	numCh  uint32
-}
-
-// newSineToneGenerator creates a sine wave generator.
-// Frequency is in Hz, levelDB is the gain in decibels (0 for a full scale).
-func newSineToneGenerator(config alsa.Config, frequency float64, levelDB float64) *sineToneGenerator {
-	g := &sineToneGenerator{
-		format: config.Format,
-		numCh:  config.Channels,
-		// The phase increment per frame.
-		step:   frequency * 2 * math.Pi / float64(config.Rate),
-		gain:   math.Pow(10, levelDB/20.0),
-		phases: make([]float64, config.Channels),
-	}
-
-	// Create a phase offset between channels for stereo signals.
-	phaseStep := 0.0
-	if config.Channels > 1 {
-		phaseStep = math.Pi / 2 / float64(config.Channels-1)
-	}
-
-	for i := uint32(0); i < config.Channels; i++ {
-		g.phases[i] = float64(i) * phaseStep
-	}
-
-	return g
-}
-
-// Read fills the buffer with sine wave data.
-func (g *sineToneGenerator) Read(buffer []byte) {
-	bytesPerSample := alsa.PcmFormatToBits(g.format) / 8
-	frameSize := bytesPerSample * g.numCh
-	numFrames := len(buffer) / int(frameSize)
-
-	for f := 0; f < numFrames; f++ { // Loop over frames
-		for c := 0; c < int(g.numCh); c++ { // Loop over channels in the current frame
-			sine := math.Sin(g.phases[c]) * g.gain
-			offset := (f*int(g.numCh) + c) * int(bytesPerSample)
-
-			switch g.format {
-			case alsa.SNDRV_PCM_FORMAT_S16_LE:
-				var sample int16
-				if sine >= 1.0 {
-					sample = 32767
-				} else if sine <= -1.0 {
-					sample = -32768
-				} else {
-					sample = int16(sine * 32767)
-				}
-
-				binary.LittleEndian.PutUint16(buffer[offset:], uint16(sample))
-			case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
-				var sample float32
-				if sine >= 1.0 {
-					sample = 1.0
-				} else if sine <= -1.0 {
-					sample = -1.0
-				} else {
-					sample = float32(sine)
-				}
-
-				binary.LittleEndian.PutUint32(buffer[offset:], math.Float32bits(sample))
-			}
-		}
-
-		// Increment phase for all channels after each frame.
-		for c := 0; c < int(g.numCh); c++ {
-			g.phases[c] += g.step
-		}
-	}
-}
-
-// energy calculates the signal energy (sum of squares of samples) in a buffer.
-func energy(buffer []byte, format alsa.PcmFormat) float64 {
-	sum := 0.0
-
-	switch format {
-	case alsa.SNDRV_PCM_FORMAT_S16_LE:
-		samples := unsafe.Slice((*int16)(unsafe.Pointer(&buffer[0])), len(buffer)/2)
-		for _, sample := range samples {
-			val := float64(sample)
-			sum += val * val
-		}
-	case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
-		samples := unsafe.Slice((*float32)(unsafe.Pointer(&buffer[0])), len(buffer)/4)
-		for _, sample := range samples {
-			val := float64(sample)
-			sum += val * val
-		}
-	}
-
-	return sum
-}
-
 func testPcmMmapWriteTiming(t *testing.T) {
 	config := defaultConfig
 	// Handle Close/Stop/Wait in a centralized defer block.
@@ -2421,7 +2301,6 @@ func testPcmMmapWriteTiming(t *testing.T) {
 
 	// Prepare explicitly.
 	require.NoError(t, pcm.Prepare())
-	require.NoError(t, capturePcm.Prepare())
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -2587,7 +2466,6 @@ func testPcmMmapReadTiming(t *testing.T) {
 
 	// Prepare explicitly.
 	require.NoError(t, playbackPcm.Prepare())
-	require.NoError(t, pcm.Prepare())
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -2745,8 +2623,8 @@ func testPcmMmapTimestamp(t *testing.T) {
 		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
 	}
 
+	// Prepare explicitly.
 	require.NoError(t, pcm.Prepare(), "playback stream prepare failed")
-	require.NoError(t, capturePcm.Prepare(), "capture stream prepare failed")
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -2858,7 +2736,7 @@ func testPcmMmapTimestamp(t *testing.T) {
 	avail1, ts1, err1 := pcm.Timestamp()
 	require.NoError(t, err1, "First Timestamp() call failed")
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	avail2, ts2, err2 := pcm.Timestamp()
 	require.NoError(t, err2, "Second Timestamp() call failed")
@@ -2873,4 +2751,104 @@ func testPcmMmapTimestamp(t *testing.T) {
 		// Allow a generous 5-second delta.
 		assert.WithinDuration(t, now, ts2, 5*time.Second, "Timestamp should be close to current wall-clock time")
 	}
+}
+
+// sineToneGenerator is a helper for audio tests that generates a sine wave.
+type sineToneGenerator struct {
+	phases []float64
+	gain   float64
+	step   float64
+	format alsa.PcmFormat
+	numCh  uint32
+}
+
+// newSineToneGenerator creates a sine wave generator.
+// Frequency is in Hz, levelDB is the gain in decibels (0 for a full scale).
+func newSineToneGenerator(config alsa.Config, frequency float64, levelDB float64) *sineToneGenerator {
+	g := &sineToneGenerator{
+		format: config.Format,
+		numCh:  config.Channels,
+		// The phase increment per frame.
+		step:   frequency * 2 * math.Pi / float64(config.Rate),
+		gain:   math.Pow(10, levelDB/20.0),
+		phases: make([]float64, config.Channels),
+	}
+
+	// Create a phase offset between channels for stereo signals.
+	phaseStep := 0.0
+	if config.Channels > 1 {
+		phaseStep = math.Pi / 2 / float64(config.Channels-1)
+	}
+
+	for i := uint32(0); i < config.Channels; i++ {
+		g.phases[i] = float64(i) * phaseStep
+	}
+
+	return g
+}
+
+// Read fills the buffer with sine wave data.
+func (g *sineToneGenerator) Read(buffer []byte) {
+	bytesPerSample := alsa.PcmFormatToBits(g.format) / 8
+	frameSize := bytesPerSample * g.numCh
+	numFrames := len(buffer) / int(frameSize)
+
+	for f := 0; f < numFrames; f++ { // Loop over frames
+		for c := 0; c < int(g.numCh); c++ { // Loop over channels in the current frame
+			sine := math.Sin(g.phases[c]) * g.gain
+			offset := (f*int(g.numCh) + c) * int(bytesPerSample)
+
+			switch g.format {
+			case alsa.SNDRV_PCM_FORMAT_S16_LE:
+				var sample int16
+				if sine >= 1.0 {
+					sample = 32767
+				} else if sine <= -1.0 {
+					sample = -32768
+				} else {
+					sample = int16(sine * 32767)
+				}
+
+				binary.LittleEndian.PutUint16(buffer[offset:], uint16(sample))
+			case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
+				var sample float32
+				if sine >= 1.0 {
+					sample = 1.0
+				} else if sine <= -1.0 {
+					sample = -1.0
+				} else {
+					sample = float32(sine)
+				}
+
+				binary.LittleEndian.PutUint32(buffer[offset:], math.Float32bits(sample))
+			}
+		}
+
+		// Increment phase for all channels after each frame.
+		for c := 0; c < int(g.numCh); c++ {
+			g.phases[c] += g.step
+		}
+	}
+}
+
+// energy calculates the signal energy (sum of squares of samples) in a buffer.
+func energy(buffer []byte, format alsa.PcmFormat) float64 {
+	sum := 0.0
+
+	switch format {
+	case alsa.SNDRV_PCM_FORMAT_S16_LE:
+		samples := unsafe.Slice((*int16)(unsafe.Pointer(&buffer[0])), len(buffer)/2)
+		for _, sample := range samples {
+			val := float64(sample)
+			sum += val * val
+		}
+	case alsa.SNDRV_PCM_FORMAT_FLOAT_LE:
+		samples := unsafe.Slice((*float32)(unsafe.Pointer(&buffer[0])), len(buffer)/4)
+		for _, sample := range samples {
+			val := float64(sample)
+			sum += val * val
+		}
+	}
+
+	return sum
 }
