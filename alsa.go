@@ -303,4 +303,7 @@ var PcmParamFormatNames = map[PcmFormat]string{
 // The index corresponds to the SNDRV_PCM_SUBFORMAT_* value.
 var PcmParamSubformatNames = []string{
 	"STD",
+	"MSBITS_MAX",
+	"MSBITS_20",
+	"MSBITS_24",
 }
