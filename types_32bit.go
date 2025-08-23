@@ -49,7 +49,6 @@ type sndPcmStatus struct {
 }
 
 // sndPcmSyncPtr is used to synchronize hardware and application pointers via ioctl.
-// The field order must match the C struct exactly. This definition is for 32-bit systems.
 type sndPcmSyncPtr struct {
 	Flags uint32
 	S     struct {
@@ -63,8 +62,6 @@ type sndPcmSyncPtr struct {
 }
 
 // sndPcmSwParams contains software parameters for a PCM device for 32-bit systems.
-// The layout must match the C struct exactly. This version matches older kernel ABIs
-// for broader compatibility.
 type sndPcmSwParams struct {
 	TstampMode       uint32
 	PeriodStep       uint32

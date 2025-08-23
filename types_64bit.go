@@ -52,7 +52,6 @@ type sndPcmStatus struct {
 }
 
 // sndPcmSyncPtr is used to synchronize hardware and application pointers via ioctl.
-// The field order must match the C struct exactly. This definition is for 64-bit systems.
 type sndPcmSyncPtr struct {
 	Flags uint32
 	_     [4]byte // Padding to align the unions
