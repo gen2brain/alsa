@@ -74,12 +74,6 @@ func main() {
 		Format:      pcmFormat,
 	}
 
-	fmt.Printf("Capturing from ALSA device: hw:%d,%d\n", card, device)
-	fmt.Printf("Configuration: %d channels, %d Hz, %s\n", config.Channels, config.Rate, alsa.PcmParamFormatNames[config.Format])
-	fmt.Printf("Period size: %d, Period count: %d\n", config.PeriodSize, config.PeriodCount)
-	fmt.Printf("Capture duration: %d seconds\n", duration)
-	fmt.Printf("Mode: %s\n", map[bool]string{false: "Standard I/O", true: "MMAP"}[mmap])
-
 	// Open the ALSA PCM device for capture (PCM_IN).
 	flags := alsa.PCM_IN
 	if mmap {
@@ -92,6 +86,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer pcm.Close()
+
+	config = pcm.Config()
+
+	fmt.Printf("Capturing from ALSA device: hw:%d,%d\n", card, device)
+	fmt.Printf("Configuration: %d channels, %d Hz, %s\n", config.Channels, config.Rate, alsa.PcmParamFormatNames[config.Format])
+	fmt.Printf("Period size: %d, Period count: %d\n", config.PeriodSize, config.PeriodCount)
+	fmt.Printf("Capture duration: %d seconds\n", duration)
+	fmt.Printf("Mode: %s\n", map[bool]string{false: "Standard I/O", true: "MMAP"}[mmap])
 
 	// Create the output WAV file.
 	wavFile, err := os.Create(outputPath)
