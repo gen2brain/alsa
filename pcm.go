@@ -649,18 +649,6 @@ func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
 	ts := p.mmapStatus.Tstamp
 	t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
 
-	if p.isMmapped { // When status is mmapped, get avail again to ensure valid timestamp
-		tmp, err = p.AvailUpdate()
-		if err != nil {
-			return
-		}
-
-		availFrames = uint32(tmp)
-
-		ts := p.mmapStatus.Tstamp
-		t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
-	}
-
 	return
 }
 
