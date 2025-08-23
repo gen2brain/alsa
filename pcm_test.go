@@ -101,6 +101,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmMmapWriteTiming", testPcmMmapWriteTiming)
 	t.Run("PcmMmapRead", testPcmMmapRead)
 	t.Run("PcmMmapReadTiming", testPcmMmapReadTiming)
+	t.Run("PcmMmapTimestamp", testPcmMmapTimestamp)
 	t.Run("PcmState", testPcmState)
 	t.Run("PcmStop", testPcmStop)
 	t.Run("PcmWait", testPcmWait)
@@ -2713,5 +2714,163 @@ func testPcmMmapReadTiming(t *testing.T) {
 	tolerance := 200.0
 	if (durationMs-expectedDurationMs) > tolerance || (expectedDurationMs-durationMs) > tolerance {
 		t.Logf("MmapRead timing test: got %.2f ms, want ~%.2f ms. This can be flaky.", durationMs, expectedDurationMs)
+	}
+}
+
+func testPcmMmapTimestamp(t *testing.T) {
+	flags := alsa.PCM_OUT | alsa.PCM_MMAP
+	// Try with MONOTONIC flag if possible.
+	monotonicFlags := flags | alsa.PCM_MONOTONIC
+
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), monotonicFlags, &defaultConfig)
+	useMonotonic := err == nil
+	if !useMonotonic {
+		// Fallback to non-monotonic if it fails (e.g., kernel doesn't support TTSTAMP).
+		pcm, err = alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), flags, &defaultConfig)
+		require.NoError(t, err, "PcmOpen(mmap) failed")
+	}
+
+	if !useMonotonic {
+		t.Log("Testing timestamp without PCM_MONOTONIC flag (fallback).")
+	}
+
+	// We need a capture stream to drain the loopback buffer.
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_MMAP, &defaultConfig)
+	require.NoError(t, err, "PcmOpen capture (MMAP) failed")
+
+	err = pcm.Link(capturePcm)
+	if err != nil {
+		pcm.Close()
+		capturePcm.Close()
+		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
+	}
+
+	require.NoError(t, pcm.Prepare(), "playback stream prepare failed")
+	require.NoError(t, capturePcm.Prepare(), "capture stream prepare failed")
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// Use thread-safe error holders to report errors from goroutines.
+	var writerErr, readerErr error
+	var writerErrMtx, readerErrMtx sync.Mutex
+
+	setWriterErr := func(e error) {
+		writerErrMtx.Lock()
+		defer writerErrMtx.Unlock()
+
+		if writerErr == nil {
+			writerErr = e
+		}
+	}
+
+	// Start a writer goroutine to feed the playback device.
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				_, err := pcm.MmapWrite(buffer)
+				if err != nil {
+					// EBADF, EPIPE, or EBADFD are expected on shutdown.
+					if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, unix.EBADFD) {
+						return
+					}
+
+					// EAGAIN is fine, just retry.
+					if errors.Is(err, syscall.EAGAIN) {
+						continue
+					}
+
+					// Report other errors.
+					setWriterErr(err)
+
+					return
+				}
+			}
+		}
+	}()
+
+	// Start a reader goroutine to drain the capture device.
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		buffer := make([]byte, alsa.PcmFramesToBytes(capturePcm, capturePcm.PeriodSize()))
+
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				_, err := capturePcm.MmapRead(buffer)
+				if err != nil {
+					// Errors are expected on shutdown, just exit.
+					return
+				}
+			}
+		}
+	}()
+
+	// Centralized cleanup.
+	defer func() {
+		close(done)
+		wg.Wait()
+		_ = pcm.Stop()
+		_ = capturePcm.Stop()
+		_ = pcm.Unlink()
+		_ = pcm.Close()
+		_ = capturePcm.Close()
+
+		writerErrMtx.Lock()
+		require.NoError(t, writerErr, "Writer goroutine failed")
+		writerErrMtx.Unlock()
+
+		readerErrMtx.Lock()
+		require.NoError(t, readerErr, "Reader goroutine failed")
+		readerErrMtx.Unlock()
+	}()
+
+	// Wait for the stream to enter the RUNNING state.
+	var state alsa.PcmState
+	for i := 0; i < 100; i++ { // Wait up to 1 second
+		state = pcm.State()
+		if state == alsa.SNDRV_PCM_STATE_RUNNING {
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, state, "Stream did not enter RUNNING state")
+
+	// Give the reader and writer goroutines a moment to process some data.
+	// This ensures hw_ptr advances and available frames are non-zero, avoiding the race condition.
+	time.Sleep(100 * time.Millisecond)
+
+	// Call Timestamp() twice to check that time progresses.
+	avail1, ts1, err1 := pcm.Timestamp()
+	require.NoError(t, err1, "First Timestamp() call failed")
+
+	time.Sleep(50 * time.Millisecond)
+
+	avail2, ts2, err2 := pcm.Timestamp()
+	require.NoError(t, err2, "Second Timestamp() call failed")
+
+	assert.Greater(t, avail1, uint32(0), "Available frames should be > 0 after stream has been running")
+	assert.Greater(t, avail2, uint32(0), "Available frames should be > 0 on second check")
+	assert.True(t, ts2.After(ts1), "Second timestamp should be after the first")
+
+	// If not using monotonic, check that the timestamp is close to wall-clock time.
+	if !useMonotonic {
+		now := time.Now()
+		// Allow a generous 5-second delta.
+		assert.WithinDuration(t, now, ts2, 5*time.Second, "Timestamp should be close to current wall-clock time")
 	}
 }

@@ -596,6 +596,10 @@ func (p *PCM) AvailUpdate() (int, error) {
 		return 0, err
 	}
 
+	if err := p.syncPtr(SNDRV_PCM_SYNC_PTR_HWSYNC); err != nil {
+		return 0, err
+	}
+
 	var applPtr, hwPtr sndPcmUframesT
 	if unsafe.Sizeof(applPtr) == 8 {
 		applPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
@@ -623,6 +627,41 @@ func (p *PCM) AvailUpdate() (int, error) {
 	}
 
 	return avail, nil
+}
+
+// Timestamp returns available frames and the corresponding timestamp.
+// The clock source is CLOCK_MONOTONIC if the PCM_MONOTONIC flag was used, otherwise it is CLOCK_REALTIME.
+func (p *PCM) Timestamp() (availFrames uint32, t time.Time, err error) {
+	if !p.IsReady() {
+		err = fmt.Errorf("PCM handle is not valid")
+
+		return
+	}
+
+	var tmp int
+	tmp, err = p.AvailUpdate()
+	if err != nil {
+		return
+	}
+
+	availFrames = uint32(tmp)
+
+	ts := p.mmapStatus.Tstamp
+	t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
+
+	if p.isMmapped { // When status is mmapped, get avail again to ensure valid timestamp
+		tmp, err = p.AvailUpdate()
+		if err != nil {
+			return
+		}
+
+		availFrames = uint32(tmp)
+
+		ts := p.mmapStatus.Tstamp
+		t = time.Unix(int64(ts.Sec), int64(ts.Nsec))
+	}
+
+	return
 }
 
 // xrunRecover is an internal helper to recover from an XRUN.
