@@ -45,8 +45,8 @@ func PcmParamsGet(card, device uint, flags PcmFlag) (*PcmParams, error) {
 	return &PcmParams{params: hwParams}, nil
 }
 
-// RangeMin returns the minimum value for an interval parameter.
-func (pp *PcmParams) RangeMin(param PcmParam) (uint32, error) {
+// Min returns the minimum value for an interval parameter.
+func (pp *PcmParams) Min(param PcmParam) (uint32, error) {
 	if pp == nil || pp.params == nil {
 		return 0, fmt.Errorf("params not initialized")
 	}
@@ -58,8 +58,8 @@ func (pp *PcmParams) RangeMin(param PcmParam) (uint32, error) {
 	return pp.params.Intervals[param-SNDRV_PCM_HW_PARAM_SAMPLE_BITS].MinVal, nil
 }
 
-// RangeMax returns the maximum value for an interval parameter.
-func (pp *PcmParams) RangeMax(param PcmParam) (uint32, error) {
+// Max returns the maximum value for an interval parameter.
+func (pp *PcmParams) Max(param PcmParam) (uint32, error) {
 	if pp == nil || pp.params == nil {
 		return 0, fmt.Errorf("params not initialized")
 	}
@@ -154,8 +154,8 @@ func (pp *PcmParams) String() string {
 
 	// Helper to print interval parameters
 	printInterval := func(name string, param PcmParam, unit string) {
-		rangeMin, errMin := pp.RangeMin(param)
-		rangeMax, errMax := pp.RangeMax(param)
+		rangeMin, errMin := pp.Min(param)
+		rangeMax, errMax := pp.Max(param)
 
 		if errMin != nil || errMax != nil {
 			return
@@ -184,16 +184,17 @@ func (pp *PcmParams) String() string {
 // paramInit initializes a sndPcmHwParams struct to allow all possible values.
 func paramInit(p *sndPcmHwParams) {
 	for n := range p.Masks {
-		for i := range p.Masks[n].Bits {
-			p.Masks[n].Bits[i] = ^uint32(0)
-		}
+		p.Masks[n].Bits[0] = ^uint32(0)
+		p.Masks[n].Bits[1] = ^uint32(0)
 	}
 
 	for n := range p.Intervals {
+		p.Intervals[n].MinVal = 0
 		p.Intervals[n].MaxVal = ^uint32(0)
 	}
 
 	p.Rmask = ^uint32(0)
+	p.Cmask = 0
 	p.Info = ^uint32(0)
 }
 

@@ -1389,14 +1389,14 @@ func testPcmParams(t *testing.T) {
 		require.NotNil(t, params, "PcmParamsGet returned nil params for valid device")
 
 		// For default params, the range min and max should be equal, representing the single default value.
-		rate, errMin := params.RangeMin(alsa.SNDRV_PCM_HW_PARAM_RATE)
-		rateMax, errMax := params.RangeMax(alsa.SNDRV_PCM_HW_PARAM_RATE)
+		rate, errMin := params.Min(alsa.SNDRV_PCM_HW_PARAM_RATE)
+		rateMax, errMax := params.Max(alsa.SNDRV_PCM_HW_PARAM_RATE)
 		require.NoError(t, errMin)
 		require.NoError(t, errMax)
 		assert.NotZero(t, rateMax, "Max rate should not be zero")
 		assert.NotZero(t, rate, "Min rate should not be zero")
 
-		channels, err := params.RangeMin(alsa.SNDRV_PCM_HW_PARAM_CHANNELS)
+		channels, err := params.Min(alsa.SNDRV_PCM_HW_PARAM_CHANNELS)
 		require.NoError(t, err)
 		assert.NotZero(t, channels, "Channels should not be zero")
 

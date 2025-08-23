@@ -279,6 +279,7 @@ func (p *PCM) SetConfig(config *Config) error {
 	paramInit(hwParams)
 
 	paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_FORMAT, uint32(config.Format))
+	paramSetMask(hwParams, SNDRV_PCM_HW_PARAM_SUBFORMAT, 0) // SNDRV_PCM_SUBFORMAT_STD
 	paramSetMin(hwParams, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, config.PeriodSize)
 	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_CHANNELS, config.Channels)
 	paramSetInt(hwParams, SNDRV_PCM_HW_PARAM_PERIODS, config.PeriodCount)
@@ -293,9 +294,7 @@ func (p *PCM) SetConfig(config *Config) error {
 		}
 
 		hwParams.Flags |= uint32(SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP)
-		if config.Rate > 0 {
-			p.noirqFramesPerMsec = config.Rate / 1000
-		}
+		p.noirqFramesPerMsec = config.Rate / 1000
 	}
 
 	if (p.flags & PCM_MMAP) != 0 {
