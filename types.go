@@ -63,7 +63,8 @@ type sndPcmHwParams struct {
 	RateNum   uint32
 	RateDen   uint32
 	FifoSize  sndPcmUframesT
-	Reserved  [64]byte
+	Sync      [16]byte
+	Reserved  [48]byte
 }
 
 // sndCtlCardInfo contains general information about a sound card.
