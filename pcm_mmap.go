@@ -47,12 +47,12 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			break
 		}
 
-		avail, availErr := p.AvailUpdate()
+		availFrames, availErr := p.AvailUpdate()
 		if availErr != nil {
 			return int(framesWritten), fmt.Errorf("AvailUpdate failed: %w", availErr)
 		}
 
-		buffer, _, framesToCopy, _, err := p.mmapBegin(wantFrames)
+		buffer, _, framesToCopy, err := p.mmapBegin(wantFrames, sndPcmUframesT(availFrames))
 		if err != nil {
 			return int(framesWritten), err
 		}
@@ -66,9 +66,9 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			}
 
 			if (p.flags & PCM_NOIRQ) != 0 {
-				if uint32(avail) < p.config.AvailMin {
+				if uint32(availFrames) < p.config.AvailMin {
 					if p.noirqFramesPerMsec > 0 {
-						timeout = int((p.config.AvailMin - uint32(avail)) / p.noirqFramesPerMsec)
+						timeout = int((p.config.AvailMin - uint32(availFrames)) / p.noirqFramesPerMsec)
 						if timeout < 1 {
 							timeout = 1
 						}
@@ -101,7 +101,7 @@ func (p *PCM) MmapWrite(data any) (int, error) {
 			return int(framesWritten), err
 		}
 
-		if p.State() == SNDRV_PCM_STATE_PREPARED && p.bufferSize-uint32(avail) >= p.config.StartThreshold {
+		if p.State() == SNDRV_PCM_STATE_PREPARED && p.bufferSize-uint32(availFrames) >= p.config.StartThreshold {
 			if err := p.Start(); err != nil {
 				return int(framesWritten), err
 			}
@@ -151,7 +151,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 	framesRead := uint32(0)
 
 	for framesRead < totalFrames {
-		avail, availErr := p.AvailUpdate()
+		availFrames, availErr := p.AvailUpdate()
 		if availErr != nil {
 			return int(framesRead), fmt.Errorf("AvailUpdate failed: %w", availErr)
 		}
@@ -161,7 +161,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 			break
 		}
 
-		buffer, _, framesToCopy, _, err := p.mmapBegin(wantFrames)
+		buffer, _, framesToCopy, err := p.mmapBegin(wantFrames, sndPcmUframesT(availFrames))
 		if err != nil {
 			return int(framesRead), err
 		}
@@ -175,9 +175,9 @@ func (p *PCM) MmapRead(data any) (int, error) {
 			}
 
 			if (p.flags & PCM_NOIRQ) != 0 {
-				if uint32(avail) < p.config.AvailMin {
+				if uint32(availFrames) < p.config.AvailMin {
 					if p.noirqFramesPerMsec > 0 {
-						timeout = int((p.config.AvailMin - uint32(avail)) / p.noirqFramesPerMsec)
+						timeout = int((p.config.AvailMin - uint32(availFrames)) / p.noirqFramesPerMsec)
 						if timeout < 1 {
 							timeout = 1
 						}
@@ -215,7 +215,7 @@ func (p *PCM) MmapRead(data any) (int, error) {
 
 // mmapBegin prepares for a memory-mapped transfer. It returns a slice of the main buffer corresponding to the available contiguous
 // space for writing or reading, the offset in frames from the start of the buffer, and the number of frames available in that slice.
-func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualFrames uint32, avail sndPcmUframesT, err error) {
+func (p *PCM) mmapBegin(wantFrames uint32, avail sndPcmUframesT) (buffer []byte, offsetFrames, actualFrames uint32, err error) {
 	var applPtr sndPcmUframesT
 	if unsafe.Sizeof(applPtr) == 8 {
 		applPtr = sndPcmUframesT(atomic.LoadUint64((*uint64)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
@@ -223,14 +223,6 @@ func (p *PCM) mmapBegin(wantFrames uint32) (buffer []byte, offsetFrames, actualF
 		applPtr = sndPcmUframesT(atomic.LoadUint32((*uint32)(unsafe.Pointer(&p.mmapControl.ApplPtr))))
 	}
 
-	tmp, availErr := p.AvailUpdate()
-	if availErr != nil {
-		err = availErr
-
-		return
-	}
-
-	avail = sndPcmUframesT(tmp)
 	if wantFrames > uint32(avail) {
 		wantFrames = uint32(avail)
 	}
