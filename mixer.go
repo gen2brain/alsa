@@ -231,6 +231,8 @@ func (m *Mixer) AddNewCtls() error {
 		m.ctlIdMap[ctl.ID()] = ctl // Populate the ID map for new controls
 	}
 
+	m.sortControls()
+
 	return nil
 }
 
@@ -383,6 +385,8 @@ func (m *Mixer) enumerateAllControls() error {
 		m.ctlMap[name] = append(m.ctlMap[name], ctl)
 		m.ctlIdMap[ctl.ID()] = ctl
 	}
+
+	m.sortControls()
 
 	return nil
 }
