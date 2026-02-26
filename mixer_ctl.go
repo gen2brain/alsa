@@ -32,6 +32,15 @@ func (ctl *MixerCtl) ID() uint32 {
 	return ctl.info.Id.Numid
 }
 
+// Index returns the index of the control (used for controls with the same name).
+func (ctl *MixerCtl) Index() uint32 {
+	if ctl == nil {
+		return 0
+	}
+
+	return ctl.info.Id.Index
+}
+
 // Device returns the device number associated with the control.
 func (ctl *MixerCtl) Device() uint32 {
 	if ctl == nil {
