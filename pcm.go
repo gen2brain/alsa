@@ -663,14 +663,13 @@ func (p *PCM) xrunRecover(err error) error {
 
 	if isEPIPE {
 		p.xruns++
-
-		return nil
 	}
 
 	if (p.flags & PCM_NORESTART) != 0 {
 		return fmt.Errorf("xrun or bad state occurred with PCM_NORESTART: %w", err)
 	}
 
+	// Re-prepare so the next transfer restarts the stream out of XRUN.
 	if prepErr := p.Prepare(); prepErr != nil {
 		return fmt.Errorf("recovery failed: could not prepare stream: %w", prepErr)
 	}
