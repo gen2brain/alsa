@@ -50,6 +50,15 @@ func (ctl *MixerCtl) Subdevice() uint32 {
 	return ctl.info.Id.Subdevice
 }
 
+// Index returns the index that distinguishes controls sharing the same name.
+func (ctl *MixerCtl) Index() uint32 {
+	if ctl == nil {
+		return 0
+	}
+
+	return ctl.info.Id.Index
+}
+
 // NumValues returns the number of values for the control (e.g., 2 for stereo volume).
 func (ctl *MixerCtl) NumValues() uint32 {
 	if ctl == nil {
