@@ -6,24 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/gen2brain/alsa"
 )
 
+// Card and device numbers are resolved at runtime in TestMain; they are not
+// fixed across machines.
 var (
-	// loopbackCard stores the dynamically found card number for the loopback device.
-	loopbackCard = -1
-
-	// dummyCard stores the dynamically found card number for the dummy device.
-	dummyCard = -1
-
-	// loopbackPlaybackDevice is the playback device on the loopback card.
+	loopbackCard           = -1
+	dummyCard              = -1
 	loopbackPlaybackDevice = -1
-
-	// loopbackCaptureDevice is the capture device on the loopback card.
-	loopbackCaptureDevice = -1
+	loopbackCaptureDevice  = -1
 )
 
 // findCard searches /proc/asound/cards for the passed device name and returns its card number. Returns -1 if not found.
@@ -37,7 +29,7 @@ func findCard(name string) int {
 	for _, line := range lines {
 		if strings.Contains(line, name) {
 			var card int
-			// The format is " 0 [Loopback       ]: Loopback - Loopback"
+			// Lines look like " 0 [Loopback       ]: Loopback - Loopback".
 			_, err := fmt.Sscanf(line, " %d", &card)
 			if err == nil {
 				return card
@@ -48,20 +40,18 @@ func findCard(name string) int {
 	return -1
 }
 
-// TestMain checks for the loopback device before running tests.
+// TestMain skips the whole suite (exit 0) unless both virtual cards are present.
 func TestMain(m *testing.M) {
 	loopbackCard = findCard("Loopback")
 	if loopbackCard == -1 {
-		fmt.Println("ALSA loopback device not found. Skipping tests.")
-		fmt.Println("Please run: sudo modprobe snd-aloop")
-		os.Exit(0) // Exit successfully, skipping tests.
+		fmt.Println("snd-aloop not loaded (sudo modprobe snd-aloop); skipping tests.")
+		os.Exit(0)
 	}
 
 	dummyCard = findCard("Dummy")
 	if dummyCard == -1 {
-		fmt.Println("ALSA dummy device not found. Skipping tests.")
-		fmt.Println("Please run: sudo modprobe snd-dummy")
-		os.Exit(0) // Exit successfully, skipping tests.
+		fmt.Println("snd-dummy not loaded (sudo modprobe snd-dummy); skipping tests.")
+		os.Exit(0)
 	}
 
 	loopbackPlaybackDevice = 0
@@ -74,10 +64,6 @@ func TestEnumerateCards(t *testing.T) {
 	cards, err := alsa.EnumerateCards()
 	require.NoError(t, err, "EnumerateCards should not return an error")
 	require.NotEmpty(t, cards, "EnumerateCards should find at least one card")
-
-	for _, card := range cards {
-		t.Log(card.String())
-	}
 
 	foundLoopback := false
 	for _, card := range cards {
