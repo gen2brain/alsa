@@ -670,11 +670,19 @@ func (p *PCM) xrunRecover(err error) error {
 	}
 
 	// Re-prepare so the next transfer restarts the stream out of XRUN.
-	if prepErr := p.Prepare(); prepErr != nil {
-		return fmt.Errorf("recovery failed: could not prepare stream: %w", prepErr)
+	prepErr := p.Prepare()
+	if prepErr == nil {
+		return nil
 	}
 
-	return nil
+	// A linked stream can't re-prepare itself (EBUSY while a sibling is RUNNING),
+	// and dropping the group here would corrupt siblings other goroutines drive.
+	// Surface the xrun; the caller recovers the whole group.
+	if errors.Is(prepErr, syscall.EBUSY) {
+		return err
+	}
+
+	return fmt.Errorf("recovery failed: could not prepare stream: %w", prepErr)
 }
 
 // mapStatusAndControl maps the kernel's status and control structures into memory.

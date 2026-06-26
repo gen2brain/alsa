@@ -39,9 +39,8 @@ func waitForState(p *alsa.PCM, want alsa.PcmState) alsa.PcmState {
 	return state
 }
 
-// isStreamDisrupted reports whether err is a transient ALSA condition an I/O loop
-// over the loopback may hit when a stream xruns, enters a bad state, or is closed
-// during shutdown. These are expected during the timing tests, not failures.
+// isStreamDisrupted reports whether err is a transient loopback condition (xrun,
+// bad state, or shutdown close) that the timing tests expect rather than fail on.
 func isStreamDisrupted(err error) bool {
 	return errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, unix.EBADFD) ||
@@ -71,11 +70,10 @@ func drainWithin(p *alsa.PCM, timeout time.Duration) error {
 	}
 }
 
-// startLoopbackDrainer continuously reads a non-blocking capture stream to keep a
-// linked loopback flowing, until the returned stop function is called. stop joins
-// the goroutine and reports the first unexpected error. Non-blocking reads
-// guarantee the goroutine observes the stop signal rather than parking in a
-// blocking Read, which Stop() does not reliably unblock on the loopback driver.
+// startLoopbackDrainer reads a non-blocking capture stream to keep a linked
+// loopback flowing; the returned stop joins the goroutine and reports the first
+// unexpected error. Non-blocking reads let it observe the stop signal instead of
+// parking in a blocking Read, which Stop() does not reliably unblock.
 func startLoopbackDrainer(capture *alsa.PCM) (stop func() error) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
@@ -224,6 +222,7 @@ func TestPcmHardware(t *testing.T) {
 	t.Run("PcmParams", testPcmParams)
 	t.Run("SetConfig", testSetConfig)
 	t.Run("PcmLink", testPcmLink)
+	t.Run("PcmLinkedXrunRecovery", testPcmLinkedXrunRecovery)
 	t.Run("PcmDrain", testPcmDrain)
 	t.Run("PcmPause", testPcmPause)
 	t.Run("PcmLoopback", testPcmLoopback)
@@ -1289,6 +1288,63 @@ func testPcmLink(t *testing.T) {
 	}
 
 	require.NoError(t, pcm1.Unlink(), "pcm1.Unlink() failed")
+}
+
+// testPcmLinkedXrunRecovery guards the recovery path that xrunRecover depends on
+// for linked streams: a group-wide PREPARE is rejected with EBUSY while a sibling
+// is still RUNNING, so recovery must drop the group to SETUP before preparing.
+func testPcmLinkedXrunRecovery(t *testing.T) {
+	config := defaultConfig
+	config.StartThreshold = config.PeriodSize
+
+	pcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackPlaybackDevice), alsa.PCM_OUT|alsa.PCM_NONBLOCK, &config)
+	require.NoError(t, err)
+
+	capturePcm, err := alsa.PcmOpen(uint(loopbackCard), uint(loopbackCaptureDevice), alsa.PCM_IN|alsa.PCM_NONBLOCK, &config)
+	require.NoError(t, err)
+
+	if err := pcm.Link(capturePcm); err != nil {
+		pcm.Close()
+		capturePcm.Close()
+		t.Skipf("Failed to link PCM streams, skipping test: %v", err)
+	}
+
+	require.NoError(t, pcm.Prepare())
+
+	stopDrainer := startLoopbackDrainer(capturePcm)
+	defer func() {
+		_ = stopDrainer()
+		_ = pcm.Stop()
+		_ = pcm.Unlink()
+		_ = pcm.Close()
+		_ = capturePcm.Close()
+	}()
+
+	buffer := make([]byte, alsa.PcmFramesToBytes(pcm, pcm.PeriodSize()))
+	writeTwoPeriods := func() {
+		for i := 0; i < 2; i++ {
+			if _, err := pcm.Write(buffer); err != nil && !isStreamDisrupted(err) {
+				require.NoError(t, err, "write failed")
+			}
+		}
+	}
+
+	writeTwoPeriods()
+	if waitForState(pcm, alsa.SNDRV_PCM_STATE_RUNNING) != alsa.SNDRV_PCM_STATE_RUNNING {
+		t.Skip("stream did not reach RUNNING state")
+	}
+
+	// A linked stream can't re-prepare itself; xrunRecover must surface the xrun
+	// (EPIPE) without dropping the group.
+	recErr := alsa.XrunRecoverForTest(pcm, syscall.EPIPE)
+	require.ErrorIs(t, recErr, syscall.EPIPE, "linked xrun should surface as EPIPE")
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, pcm.State(), "xrunRecover must not drop a linked stream")
+
+	// The caller recovers the group explicitly.
+	require.NoError(t, pcm.Stop(), "group stop failed")
+	require.NoError(t, pcm.Prepare(), "group prepare failed")
+	writeTwoPeriods()
+	require.Equal(t, alsa.SNDRV_PCM_STATE_RUNNING, waitForState(pcm, alsa.SNDRV_PCM_STATE_RUNNING), "stream should restart to RUNNING after group recovery")
 }
 
 func testPcmDrain(t *testing.T) {
